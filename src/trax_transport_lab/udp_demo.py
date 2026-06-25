@@ -2,140 +2,69 @@ from __future__ import annotations
 
 import argparse
 import json
-import struct
 import socket
 import threading
 from typing import Any
 
-from .dag_model import DemoDag, DemoDagNode
-from .framing import (
-    MAX_PACKET_LEN,
-    FramingError,
-    recv_frame,
-    send_frame,
-)
+from .dag_model import DemoDag
 from .logging_utils import DemoLog
+from .messages import MessageError, decode_message, encode_message, hex_to_bytes
 from .metrics import RunMetrics
-from .messages import (
-    MessageError,
-    canonical_json,
-    decode_message,
-    encode_message,
-    hex_to_bytes,
+from .tcp_demo import (
+    INIT_SESSION_ID_SEED,
+    ProtocolError,
+    _append_dag_output,
+    _make_security_message,
+    _packet_hash,
+    _validate_security_message,
+    security_payload,
 )
 from .trax_adapter import TraxAdapter
 from .transport_common import TransportDemoResult
 
 
-INIT_SESSION_ID_SEED = b"TRAX_TRANSPORT_LAB_INIT_SESSION_V0"
-JUNK_PAYLOAD = b"TRAX_TEST_STREAM_BLOCK_0001" * 128
-SOCKET_TIMEOUT_SECONDS = 3.0
+UDP_PAYLOAD = b"TRAX_UDP_TEST_BLOCK_0001" * 32
+UDP_MAX_DATAGRAM = 64 * 1024
+UDP_TIMEOUT_SECONDS = 2.0
+
+UdpDemoResult = TransportDemoResult
 
 
-TcpDemoResult = TransportDemoResult
-
-
-class ProtocolError(RuntimeError):
-    def __init__(self, message_type: str, reason: str):
-        super().__init__(reason)
-        self.message_type = message_type
-        self.reason = reason
-
-
-def security_payload(message_type: str, fields: dict[str, Any]) -> bytes:
-    return canonical_json({"message_type": message_type, **fields})
-
-
-def _packet_hash(adapter: TraxAdapter, message: dict[str, Any]) -> bytes:
-    return adapter.hash32(encode_message(message))
-
-
-def _send_tcp(sock: socket.socket, message: dict[str, Any], metrics: RunMetrics) -> None:
-    data = encode_message(message)
-    send_frame(sock, data)
-    metrics.add_frame_sent()
-    metrics.add_bytes_sent(len(data) + 4)
-
-
-def _recv_tcp(sock: socket.socket, metrics: RunMetrics) -> dict[str, Any]:
-    data = recv_frame(sock, MAX_PACKET_LEN)
-    metrics.add_frame_received()
-    metrics.add_bytes_received(len(data) + 4)
-    return decode_message(data)
-
-
-def _validate_security_message(
-    adapter: TraxAdapter,
+def _send_udp(
+    sock: socket.socket,
     message: dict[str, Any],
-    expected_type: str,
-    receiver_public_key: bytes,
-    payload: bytes,
-    expected_session_id: bytes | None = None,
+    address,
+    metrics: RunMetrics,
 ) -> None:
-    message_type = message.get("message_type", "<missing>")
-    if message_type != expected_type:
-        raise ProtocolError(str(message_type), f"expected {expected_type}")
-    if expected_session_id is not None:
-        session_id = hex_to_bytes(message["session_id"], "session_id")
-        if session_id != expected_session_id:
-            raise ProtocolError(expected_type, "wrong session_id")
-    if hex_to_bytes(message["receiver_public_key"], "receiver_public_key") != receiver_public_key:
-        raise ProtocolError(expected_type, "wrong receiver_public_key")
-    envelope = hex_to_bytes(message["admission_envelope"], "admission_envelope")
-    if not adapter.verify_for_receiver(envelope, payload, receiver_public_key):
-        raise ProtocolError(expected_type, "admission envelope verification failed")
-    decoded = adapter.decode_envelope(envelope)
-    if decoded.get("message_type") not in (None, expected_type):
-        raise ProtocolError(expected_type, "envelope message_type mismatch")
+    data = encode_message(message)
+    if len(data) > UDP_MAX_DATAGRAM:
+        raise ProtocolError(message.get("message_type", "<unknown>"), "datagram too large")
+    sent = sock.sendto(data, address)
+    metrics.add_datagram_sent()
+    metrics.add_bytes_sent(sent)
 
 
-def _make_security_message(
-    adapter: TraxAdapter,
-    message_type: str,
-    sender_private_key,
-    sender_public_key: bytes,
-    receiver_public_key: bytes,
-    session_id: bytes,
-    payload: bytes,
-    dag_parent_refs: list[bytes] | None = None,
-    **extra: Any,
-) -> dict[str, Any]:
-    envelope = adapter.create_envelope(
-        sender_private_key,
-        receiver_public_key,
-        session_id,
-        payload,
-        message_type,
-        dag_parent_refs=dag_parent_refs,
-    )
-    return {
-        "message_type": message_type,
-        "session_id": session_id.hex(),
-        "sender_public_key": sender_public_key.hex(),
-        "receiver_public_key": receiver_public_key.hex(),
-        "payload_hash": adapter.hash32(payload).hex(),
-        "dag_parent_refs": [ref.hex() for ref in dag_parent_refs or []],
-        "admission_envelope": envelope.hex(),
-        **extra,
-    }
+def _recv_udp(sock: socket.socket, metrics: RunMetrics) -> tuple[dict[str, Any], tuple[str, int]]:
+    data, address = sock.recvfrom(UDP_MAX_DATAGRAM)
+    metrics.add_datagram_received()
+    metrics.add_bytes_received(len(data))
+    return decode_message(data), address
 
 
 def _server(
-    listener: socket.socket,
+    sock: socket.socket,
     adapter: TraxAdapter,
     dag: DemoDag,
     log: DemoLog,
     metrics: RunMetrics,
     server_keys,
 ) -> None:
-    conn: socket.socket | None = None
+    client_address = None
     try:
-        conn, _ = listener.accept()
-        conn.settimeout(SOCKET_TIMEOUT_SECONDS)
         init_session_id = adapter.hash32(INIT_SESSION_ID_SEED)
 
         with metrics.measure("TRAX_INIT"):
-            init = _recv_tcp(conn, metrics)
+            init, client_address = _recv_udp(sock, metrics)
         client_public_key = hex_to_bytes(init["sender_public_key"], "sender_public_key")
         client_nonce = hex_to_bytes(init["client_nonce"], "client_nonce")
         init_payload = security_payload(
@@ -181,11 +110,11 @@ def _server(
             server_nonce=server_nonce.hex(),
         )
         with metrics.measure("TRAX_INIT_ACK"):
-            _send_tcp(conn, init_ack, metrics)
+            _send_udp(sock, init_ack, client_address, metrics)
         log.add("TRAX_INIT_ACK sent")
 
         with metrics.measure("TRAX_COMMIT"):
-            commit = _recv_tcp(conn, metrics)
+            commit, _ = _recv_udp(sock, metrics)
         commit_payload = security_payload(
             "TRAX_COMMIT",
             {
@@ -203,6 +132,7 @@ def _server(
             session_id,
         )
         log.add("TRAX_COMMIT accepted")
+
         with metrics.measure("dag_append_SESSION_START_V0"):
             session_node = dag.append_node(
                 "SESSION_START_V0",
@@ -218,7 +148,7 @@ def _server(
         log.add("SESSION_START_V0 appended")
 
         with metrics.measure("TRAX_REQ"):
-            req = _recv_tcp(conn, metrics)
+            req, _ = _recv_udp(sock, metrics)
         committed_payload_hash = hex_to_bytes(req["payload_hash"], "payload_hash")
         req_payload = security_payload(
             "TRAX_REQ",
@@ -259,11 +189,11 @@ def _server(
             payload_hash=committed_payload_hash.hex(),
         )
         with metrics.measure("TRAX_REQ_ACK"):
-            _send_tcp(conn, req_ack, metrics)
+            _send_udp(sock, req_ack, client_address, metrics)
         log.add("TRAX_REQ_ACK sent")
 
         with metrics.measure("JUNK_STREAM_PAYLOAD"):
-            junk = _recv_tcp(conn, metrics)
+            junk, _ = _recv_udp(sock, metrics)
         if junk["message_type"] != "JUNK_STREAM_PAYLOAD":
             raise ProtocolError(junk["message_type"], "expected JUNK_STREAM_PAYLOAD")
         if hex_to_bytes(junk["session_id"], "session_id") != session_id:
@@ -296,8 +226,9 @@ def _server(
             payload_hash=committed_payload_hash.hex(),
         )
         with metrics.measure("TRAX_RES_ACK"):
-            _send_tcp(conn, res_ack, metrics)
+            _send_udp(sock, res_ack, client_address, metrics)
         log.add("TRAX_RES_ACK sent")
+
         with metrics.measure("dag_append_STREAM_EXCHANGE_V0"):
             stream_node = dag.append_node(
                 "STREAM_EXCHANGE_V0",
@@ -312,45 +243,46 @@ def _server(
             )
             metrics.add_dag_node(stream_node.node_hash)
         log.add("STREAM_EXCHANGE_V0 appended")
+    except socket.timeout as exc:
+        log.reject("<timeout>", str(exc) or "udp receive timed out")
     except ProtocolError as exc:
         log.reject(exc.message_type, exc.reason)
-    except (MessageError, FramingError, OSError, KeyError, ValueError) as exc:
+    except (MessageError, OSError, KeyError, ValueError) as exc:
         log.reject("<unknown>", str(exc))
     finally:
-        if conn is not None:
-            conn.close()
-        listener.close()
+        sock.close()
 
 
-def run_tcp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = None) -> TcpDemoResult:
+def run_udp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = None) -> UdpDemoResult:
     adapter = adapter or TraxAdapter()
     dag = DemoDag()
     log = DemoLog()
-    metrics = RunMetrics("tcp")
+    metrics = RunMetrics("udp")
     server_keys = adapter.generate_keypair()
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(1)
-    listener.settimeout(SOCKET_TIMEOUT_SECONDS)
-    host, port = listener.getsockname()
+
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server_sock.bind(("127.0.0.1", 0))
+    server_sock.settimeout(UDP_TIMEOUT_SECONDS)
+    server_address = server_sock.getsockname()
 
     server_thread = threading.Thread(
-        target=_server, args=(listener, adapter, dag, log, metrics, server_keys), daemon=True
+        target=_server,
+        args=(server_sock, adapter, dag, log, metrics, server_keys),
+        daemon=True,
     )
     server_thread.start()
 
     error: str | None = None
     try:
-        _client(host, port, adapter, log, metrics, adverse_case, server_keys.public_key)
+        _client(server_address, adapter, log, metrics, adverse_case, server_keys.public_key)
     except ProtocolError as exc:
         log.reject(exc.message_type, exc.reason)
         error = exc.reason
-    except (MessageError, FramingError, OSError, KeyError, ValueError) as exc:
+    except (MessageError, OSError, KeyError, ValueError) as exc:
         log.reject("<client>", str(exc))
         error = str(exc)
 
-    server_thread.join(SOCKET_TIMEOUT_SECONDS + 1.0)
+    server_thread.join(UDP_TIMEOUT_SECONDS + 1.0)
     if server_thread.is_alive():
         error = error or "server thread did not finish"
         log.reject("<server>", error)
@@ -363,9 +295,10 @@ def run_tcp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = 
         _append_dag_output(dag, log)
         log.add("")
         log.lines.extend(metrics.summary_lines())
-    return TcpDemoResult(
+
+    return UdpDemoResult(
         ok=ok,
-        transport="tcp",
+        transport="udp",
         dag_nodes=dag.enumerate(),
         final_tip=dag.final_tip(),
         log_lines=list(log.lines),
@@ -375,32 +308,22 @@ def run_tcp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = 
 
 
 def _client(
-    host: str,
-    port: int,
+    server_address,
     adapter: TraxAdapter,
     log: DemoLog,
     metrics: RunMetrics,
     adverse_case: str | None,
     observed_server_public_key: bytes,
 ) -> None:
-    with socket.create_connection((host, port), timeout=SOCKET_TIMEOUT_SECONDS) as sock:
-        sock.settimeout(SOCKET_TIMEOUT_SECONDS)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(UDP_TIMEOUT_SECONDS)
         client_keys = adapter.generate_keypair()
         init_session_id = adapter.hash32(INIT_SESSION_ID_SEED)
         client_nonce = adapter.generate_nonce()
 
-        if adverse_case == "oversized_frame":
-            sock.sendall(struct.pack(">I", MAX_PACKET_LEN + 1))
-            metrics.add_frame_sent()
-            metrics.add_bytes_sent(4)
-            log.add("TRAX_INIT sent")
+        if adverse_case == "timeout":
             return
-        if adverse_case == "truncated_frame":
-            sock.sendall(struct.pack(">I", 32) + b"short")
-            metrics.add_frame_sent()
-            metrics.add_bytes_sent(9)
-            log.add("TRAX_INIT sent")
-            return
+
         init_payload = security_payload(
             "TRAX_INIT",
             {
@@ -422,25 +345,31 @@ def _client(
             init_payload,
             client_nonce=client_nonce.hex(),
         )
+
         if adverse_case == "malformed_init":
-            sock.sendall(b"\x00\x00\x00\x09not-json!")
-            metrics.add_frame_sent()
-            metrics.add_bytes_sent(13)
+            sent = sock.sendto(b"not-json!", server_address)
+            metrics.add_datagram_sent()
+            metrics.add_bytes_sent(sent)
             log.add("TRAX_INIT sent")
             return
 
         with metrics.measure("session_handshake_total"):
             with metrics.measure("TRAX_INIT"):
-                _send_tcp(sock, init, metrics)
+                _send_udp(sock, init, server_address, metrics)
             log.add("TRAX_INIT sent")
 
+            if adverse_case == "duplicate_init":
+                with metrics.measure("TRAX_INIT"):
+                    _send_udp(sock, init, server_address, metrics)
+                log.add("TRAX_INIT sent")
+
             if adverse_case == "req_before_commit":
-                bad_payload_hash = adapter.hash32(JUNK_PAYLOAD)
+                payload_hash = adapter.hash32(UDP_PAYLOAD)
                 bad_req_payload = security_payload(
                     "TRAX_REQ",
                     {
                         "cycle_index": 0,
-                        "payload_hash": bad_payload_hash.hex(),
+                        "payload_hash": payload_hash.hex(),
                         "session_id": init_session_id.hex(),
                     },
                 )
@@ -453,14 +382,15 @@ def _client(
                     init_session_id,
                     bad_req_payload,
                     cycle_index=0,
+                    payload_hash=payload_hash.hex(),
                 )
                 with metrics.measure("TRAX_REQ"):
-                    _send_tcp(sock, bad_req, metrics)
+                    _send_udp(sock, bad_req, server_address, metrics)
                 log.add("TRAX_REQ sent")
                 return
 
             with metrics.measure("TRAX_INIT_ACK"):
-                init_ack = _recv_tcp(sock, metrics)
+                init_ack, _ = _recv_udp(sock, metrics)
             server_public_key = hex_to_bytes(init_ack["sender_public_key"], "sender_public_key")
             server_nonce = hex_to_bytes(init_ack["server_nonce"], "server_nonce")
             transcript_hash = adapter.hash32(client_keys.public_key + server_public_key)
@@ -475,8 +405,6 @@ def _client(
                     "session_id": session_id.hex(),
                 },
             )
-            if adverse_case == "bad_init_ack":
-                init_ack["admission_envelope"] = "00"
             _validate_security_message(
                 adapter,
                 init_ack,
@@ -497,7 +425,7 @@ def _client(
             )
             commit_session_id = session_id
             if adverse_case == "wrong_session":
-                commit_session_id = adapter.hash32(b"wrong-session")
+                commit_session_id = adapter.hash32(b"wrong-udp-session")
             commit = _make_security_message(
                 adapter,
                 "TRAX_COMMIT",
@@ -507,25 +435,23 @@ def _client(
                 commit_session_id,
                 commit_payload,
             )
-            if adverse_case == "bad_commit":
-                commit["admission_envelope"] = "00"
             with metrics.measure("TRAX_COMMIT"):
-                _send_tcp(sock, commit, metrics)
+                _send_udp(sock, commit, server_address, metrics)
             log.add("TRAX_COMMIT sent")
-            if adverse_case in {"bad_commit", "wrong_session"}:
+            if adverse_case == "wrong_session":
                 return
 
-        payload_hash = adapter.hash32(JUNK_PAYLOAD)
+        payload_hash = adapter.hash32(UDP_PAYLOAD)
         if adverse_case == "payload_before_ack":
             junk = {
                 "message_type": "JUNK_STREAM_PAYLOAD",
                 "session_id": session_id.hex(),
-                "payload": JUNK_PAYLOAD.hex(),
+                "payload": UDP_PAYLOAD.hex(),
                 "payload_hash": payload_hash.hex(),
                 "cycle_index": 0,
             }
             with metrics.measure("JUNK_STREAM_PAYLOAD"):
-                _send_tcp(sock, junk, metrics)
+                _send_udp(sock, junk, server_address, metrics)
             log.add("JUNK_STREAM_PAYLOAD sent")
             return
 
@@ -552,7 +478,7 @@ def _client(
             if adverse_case == "wrong_message_order":
                 req["message_type"] = "TRAX_RES_ACK"
             with metrics.measure("TRAX_REQ"):
-                _send_tcp(sock, req, metrics)
+                _send_udp(sock, req, server_address, metrics)
             log.add("TRAX_REQ sent")
             if adverse_case == "wrong_message_order":
                 return
@@ -560,12 +486,12 @@ def _client(
             junk = {
                 "message_type": "JUNK_STREAM_PAYLOAD",
                 "session_id": session_id.hex(),
-                "payload": JUNK_PAYLOAD.hex(),
+                "payload": UDP_PAYLOAD.hex(),
                 "payload_hash": payload_hash.hex(),
                 "cycle_index": 0,
             }
             with metrics.measure("TRAX_REQ_ACK"):
-                req_ack = _recv_tcp(sock, metrics)
+                req_ack, _ = _recv_udp(sock, metrics)
             req_ack_payload = security_payload(
                 "TRAX_REQ_ACK",
                 {
@@ -585,16 +511,16 @@ def _client(
             log.add("TRAX_REQ_ACK accepted")
 
             if adverse_case == "payload_hash_mismatch":
-                junk["payload"] = (JUNK_PAYLOAD + b"tampered").hex()
+                junk["payload"] = (UDP_PAYLOAD + b"tampered").hex()
             with metrics.measure("JUNK_STREAM_PAYLOAD"):
-                _send_tcp(sock, junk, metrics)
+                _send_udp(sock, junk, server_address, metrics)
             log.add("JUNK_STREAM_PAYLOAD sent")
             if adverse_case == "payload_hash_mismatch":
                 return
 
             with metrics.measure("TRAX_RES_ACK"):
-                res_ack = _recv_tcp(sock, metrics)
-            res_ack_payload = security_payload(
+                res_ack, _ = _recv_udp(sock, metrics)
+            res_payload = security_payload(
                 "TRAX_RES_ACK",
                 {
                     "cycle_index": 0,
@@ -607,37 +533,27 @@ def _client(
                 res_ack,
                 "TRAX_RES_ACK",
                 client_keys.public_key,
-                res_ack_payload,
+                res_payload,
                 session_id,
             )
             log.add("TRAX_RES_ACK accepted")
 
 
-def _append_dag_output(dag: DemoDag, log: DemoLog) -> None:
-    log.add("")
-    log.add("DAG:")
-    for node in dag.enumerate():
-        log.add(f"{node.index} {node.node_type:<20} {node.node_hash.hex()}")
-    final_tip = dag.final_tip()
-    log.add("")
-    log.add(f"Final tip: {final_tip.hex() if final_tip else '<none>'}")
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the TRAX TCP transport demo.")
+    parser = argparse.ArgumentParser(description="Run the TRAX UDP transport demo.")
     parser.add_argument("--json", action="store_true", help="emit result metrics as JSON")
     args = parser.parse_args(argv)
 
-    result = run_tcp_demo()
+    result = run_udp_demo()
     if args.json:
         print(json.dumps({"ok": result.ok, "metrics": result.metrics.as_dict()}, sort_keys=True))
         return 0 if result.ok else 1
 
     if result.ok:
-        print("TCP DEMO OK")
+        print("UDP DEMO OK")
         print()
     else:
-        print("TCP DEMO FAILED")
+        print("UDP DEMO FAILED")
         print()
     for line in result.log_lines:
         print(line)

@@ -20,6 +20,7 @@ def main() -> int:
         ("Verify TRAX import", [sys.executable, "-c", "import trax; print(trax)"]),
         ("Run tests", [sys.executable, "-m", "pytest"]),
         ("Run TCP demo", [sys.executable, "-m", "trax_transport_lab.tcp_demo"]),
+        ("Run UDP demo", [sys.executable, "-m", "trax_transport_lab.udp_demo"]),
     ]
 
     try:
