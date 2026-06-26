@@ -12,7 +12,13 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from trax_transport_lab.metrics import RunMetrics, summarize_metric_runs
-from trax_transport_lab.tcp_demo import CHECKPOINT_MODE, SIGNED_ENVELOPE_MODE, run_tcp_demo
+from trax_transport_lab.tcp_demo import (
+    CHECKPOINT_MODE,
+    DAG_GENESIS_MODE,
+    MODE_CHOICES,
+    SIGNED_ENVELOPE_MODE,
+    run_tcp_demo,
+)
 from trax_transport_lab.udp_demo import run_udp_demo
 
 
@@ -35,6 +41,8 @@ def _signing_operation_count(metrics: RunMetrics) -> int:
         + counts["signed_envelope_verify_count"]
         + counts["signed_checkpoint_create_count"]
         + counts["signed_checkpoint_verify_count"]
+        + counts["signed_genesis_create_count"]
+        + counts["signed_genesis_verify_count"]
     )
 
 
@@ -65,53 +73,70 @@ def _mode_payload(transport: str, mode: str, runs: int) -> dict:
     }
 
 
-def _delta_payload(signed_payload: dict, checkpoint_payload: dict) -> dict:
-    signed = signed_payload["summary"]
-    checkpoint = checkpoint_payload["summary"]
-    signed_wall = _avg(signed, "total_wall_ms")
-    checkpoint_wall = _avg(checkpoint, "total_wall_ms")
-    wall_delta = checkpoint_wall - signed_wall
-    if signed_wall:
-        wall_delta_percent = (wall_delta / signed_wall) * 100
+def _delta_payload(mode_a_payload: dict, mode_b_payload: dict) -> dict:
+    mode_a = mode_a_payload["summary"]
+    mode_b = mode_b_payload["summary"]
+    mode_a_wall = _avg(mode_a, "total_wall_ms")
+    mode_b_wall = _avg(mode_b, "total_wall_ms")
+    wall_delta = mode_b_wall - mode_a_wall
+    if mode_a_wall:
+        wall_delta_percent = (wall_delta / mode_a_wall) * 100
     else:
         wall_delta_percent = 0.0
     return {
+        "hot_path_signed_packet_count_delta": _avg(
+            mode_b, "hot_path_signed_packet_count"
+        )
+        - _avg(mode_a, "hot_path_signed_packet_count"),
+        "signed_envelope_event_ms_delta": _avg(
+            mode_b, "signed_envelope_create_event_ms"
+        )
+        + _avg(mode_b, "signed_envelope_verify_event_ms")
+        - _avg(mode_a, "signed_envelope_create_event_ms")
+        - _avg(mode_a, "signed_envelope_verify_event_ms"),
         "total_wall_ms_delta": wall_delta,
         "total_wall_ms_delta_percent": wall_delta_percent,
         "signed_create_event_ms_delta": _avg(
-            checkpoint, "signed_envelope_create_event_ms"
+            mode_b, "signed_envelope_create_event_ms"
         )
-        - _avg(signed, "signed_envelope_create_event_ms"),
+        - _avg(mode_a, "signed_envelope_create_event_ms"),
         "signed_verify_event_ms_delta": _avg(
-            checkpoint, "signed_envelope_verify_event_ms"
+            mode_b, "signed_envelope_verify_event_ms"
         )
-        - _avg(signed, "signed_envelope_verify_event_ms"),
+        - _avg(mode_a, "signed_envelope_verify_event_ms"),
         "signing_operation_count_delta": _avg(
-            checkpoint, "signing_operation_count"
+            mode_b, "signing_operation_count"
         )
-        - _avg(signed, "signing_operation_count"),
+        - _avg(mode_a, "signing_operation_count"),
     }
 
 
-def comparison_payload(transports: list[str], runs: int) -> dict:
+def comparison_payload(
+    transports: list[str],
+    runs: int,
+    mode_a: str = SIGNED_ENVELOPE_MODE,
+    mode_b: str = DAG_GENESIS_MODE,
+) -> dict:
     payload = {
         "note": "local loopback diagnostic metrics; not benchmark-grade results",
         "runs": runs,
+        "mode_a": mode_a,
+        "mode_b": mode_b,
         "transports": {},
     }
     for transport in transports:
-        signed = _mode_payload(transport, SIGNED_ENVELOPE_MODE, runs)
-        checkpoint = _mode_payload(transport, CHECKPOINT_MODE, runs)
+        first = _mode_payload(transport, mode_a, runs)
+        second = _mode_payload(transport, mode_b, runs)
         payload["transports"][transport] = {
-            SIGNED_ENVELOPE_MODE: signed,
-            CHECKPOINT_MODE: checkpoint,
-            "delta": _delta_payload(signed, checkpoint),
-            "ok": signed["ok"] and checkpoint["ok"],
+            mode_a: first,
+            mode_b: second,
+            "delta": _delta_payload(first, second),
+            "ok": first["ok"] and second["ok"],
         }
     payload["ok"] = all(item["ok"] for item in payload["transports"].values())
     payload["interpretation"] = (
-        "Checkpoint mode reduces per-message signing work by replacing intermediate "
-        "signed envelopes with hash-bound continuity and a signed checkpoint in this "
+        "DAG-genesis mode removes per-message AAIP envelope signing from the hot path. "
+        "The remaining security check is DAG continuity from signed genesis in this "
         "local diagnostic run."
     )
     return payload
@@ -121,13 +146,19 @@ def _print_mode_summary(label: str, summary: dict) -> None:
     print(f"{label}:")
     for name in [
         "total_wall_ms",
+        "hot_path_signed_packet_count",
         "signed_envelope_create_count",
         "signed_envelope_verify_count",
+        "signed_genesis_create_count",
+        "signed_genesis_verify_count",
         "signed_checkpoint_create_count",
         "signed_checkpoint_verify_count",
         "hash_bound_message_count",
         "signed_envelope_create_event_ms",
         "signed_envelope_verify_event_ms",
+        "signed_genesis_create_event_ms",
+        "signed_genesis_verify_event_ms",
+        "hot_path_signed_packet_event_ms",
         "signed_checkpoint_create_event_ms",
         "signed_checkpoint_verify_event_ms",
         "payload_hash_verify_us",
@@ -142,15 +173,15 @@ def print_text(payload: dict) -> None:
     print("local loopback diagnostic metrics; not benchmark-grade results")
     print()
     for transport, transport_payload in payload["transports"].items():
-        signed = transport_payload[SIGNED_ENVELOPE_MODE]
-        checkpoint = transport_payload[CHECKPOINT_MODE]
+        first = transport_payload[payload["mode_a"]]
+        second = transport_payload[payload["mode_b"]]
         print(f"transport: {transport}")
         print(f"runs: {payload['runs']}")
         print(f"ok: {transport_payload['ok']}")
         print()
-        _print_mode_summary("Signed-envelope mode", signed["summary"])
+        _print_mode_summary(f"{payload['mode_a']} mode", first["summary"])
         print()
-        _print_mode_summary("Checkpoint mode", checkpoint["summary"])
+        _print_mode_summary(f"{payload['mode_b']} mode", second["summary"])
         print()
         print("Delta:")
         for name, value in transport_payload["delta"].items():
@@ -162,8 +193,10 @@ def print_text(payload: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Compare signed-envelope and checkpoint modes.")
+    parser = argparse.ArgumentParser(description="Compare TRAX transport lab modes.")
     parser.add_argument("--runs", type=int, default=5, help="number of runs per mode")
+    parser.add_argument("--mode-a", choices=MODE_CHOICES, default=SIGNED_ENVELOPE_MODE)
+    parser.add_argument("--mode-b", choices=MODE_CHOICES, default=DAG_GENESIS_MODE)
     parser.add_argument(
         "--transport",
         choices=("both", "tcp", "udp"),
@@ -177,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--runs must be >= 1")
 
     transports = list(TRANSPORTS if args.transport == "both" else (args.transport,))
-    payload = comparison_payload(transports, args.runs)
+    payload = comparison_payload(transports, args.runs, args.mode_a, args.mode_b)
     if args.json:
         print(json.dumps(payload, sort_keys=True))
     else:

@@ -64,6 +64,8 @@ python -m trax_transport_lab.tcp_demo --mode signed-envelope
 python -m trax_transport_lab.tcp_demo --mode checkpoint
 python -m trax_transport_lab.udp_demo --mode signed-envelope
 python -m trax_transport_lab.udp_demo --mode checkpoint
+python -m trax_transport_lab.tcp_demo --mode dag-genesis
+python -m trax_transport_lab.udp_demo --mode dag-genesis
 ```
 
 Or:
@@ -262,6 +264,29 @@ If checkpoint mode reduces signed envelope create/verify event time while preser
 
 These are local loopback diagnostic metrics, not benchmark-grade claims.
 
+## DAG Genesis Mode
+
+DAG-genesis mode is the intended TRAX security model. It signs the genesis DAG authority once, then accepts later packets only when their hash-bound contents extend the DAG through valid continuity.
+
+TRAX security is the DAG. Packets are not trusted because they are individually signed. Packets are accepted only when their hash-bound content can extend the signed DAG genesis through valid continuity.
+
+Content is hashed. DAG state is signed. Continuity is verified.
+
+Packets carry evidence. The DAG carries trust.
+
+Run DAG-genesis mode directly:
+
+```powershell
+python -m trax_transport_lab.udp_demo --mode dag-genesis
+python -m trax_transport_lab.udp_demo --mode dag-genesis --json
+python .\scripts\compare_modes.py --mode-a signed-envelope --mode-b dag-genesis --transport udp --runs 10
+python .\scripts\compare_transports.py --mode dag-genesis --runs 10
+```
+
+In DAG-genesis mode, `hot_path_signed_packet_count` should be 0. The only signature operation in the normal run is genesis signing/verification. Hash-bound messages and DAG append operations form the hot path.
+
+These are local loopback diagnostic metrics, not benchmark-grade claims.
+
 ## Metrics
 
 Both demos return a `RunMetrics` object and print a text metrics section. The `--json` option emits machine-readable metrics:
@@ -274,6 +299,7 @@ python -m trax_transport_lab.udp_demo --runs 10
 python .\scripts\compare_transports.py --runs 10
 python .\scripts\compare_transports.py --mode checkpoint --runs 10
 python .\scripts\compare_modes.py --runs 10
+python .\scripts\compare_modes.py --mode-a signed-envelope --mode-b dag-genesis --transport udp --runs 10
 python -m trax_transport_lab.tcp_demo --json
 python -m trax_transport_lab.udp_demo --json
 python -m trax_transport_lab.udp_demo --json --include-events

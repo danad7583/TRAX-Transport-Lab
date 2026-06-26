@@ -32,6 +32,8 @@ KEY_EVENT_NAMES = [
     "signed_envelope.verify",
     "checkpoint.create_signed_checkpoint",
     "checkpoint.verify_signed_checkpoint",
+    "dag_genesis.create_signed_genesis",
+    "dag_genesis.verify_signed_genesis",
     "hash_bound.message",
     "trax.create_admission_envelope_v1",
     "trax.verify_admission_envelope_v1_for_receiver",
@@ -120,6 +122,9 @@ class RunMetrics:
     signed_envelope_verify_count: int = 0
     signed_checkpoint_create_count: int = 0
     signed_checkpoint_verify_count: int = 0
+    signed_genesis_create_count: int = 0
+    signed_genesis_verify_count: int = 0
+    hot_path_signed_packet_count: int = 0
     hash_bound_message_count: int = 0
     final_tip: str | None = None
     started_ns: int = field(default_factory=perf_counter_ns)
@@ -252,6 +257,18 @@ class RunMetrics:
         with self._lock:
             self.signed_checkpoint_verify_count += 1
 
+    def add_signed_genesis_create(self) -> None:
+        with self._lock:
+            self.signed_genesis_create_count += 1
+
+    def add_signed_genesis_verify(self) -> None:
+        with self._lock:
+            self.signed_genesis_verify_count += 1
+
+    def add_hot_path_signed_packet(self) -> None:
+        with self._lock:
+            self.hot_path_signed_packet_count += 1
+
     def add_hash_bound_message(self) -> None:
         with self._lock:
             self.hash_bound_message_count += 1
@@ -346,6 +363,16 @@ class RunMetrics:
             "signed_checkpoint_verify_event_ms": self.named_event_total_ms(
                 "checkpoint.verify_signed_checkpoint"
             ),
+            "signed_genesis_create_event_ms": self.named_event_total_ms(
+                "dag_genesis.create_signed_genesis"
+            ),
+            "signed_genesis_verify_event_ms": self.named_event_total_ms(
+                "dag_genesis.verify_signed_genesis"
+            ),
+            "hot_path_signed_packet_event_ms": self.named_event_total_ms(
+                "signed_envelope.create"
+            )
+            + self.named_event_total_ms("signed_envelope.verify"),
             "hash_bound_messages_event_us": self.named_event_total_us("hash_bound.message"),
             "dag_append_event_us": self.named_event_total_us("dag.append_node"),
         }
@@ -386,6 +413,9 @@ class RunMetrics:
             "signed_envelope_verify_count": self.signed_envelope_verify_count,
             "signed_checkpoint_create_count": self.signed_checkpoint_create_count,
             "signed_checkpoint_verify_count": self.signed_checkpoint_verify_count,
+            "signed_genesis_create_count": self.signed_genesis_create_count,
+            "signed_genesis_verify_count": self.signed_genesis_verify_count,
+            "hot_path_signed_packet_count": self.hot_path_signed_packet_count,
             "hash_bound_message_count": self.hash_bound_message_count,
         }
 
@@ -436,6 +466,8 @@ class RunMetrics:
             "transport": self.transport,
             "mode": self.mode,
             "note": "local loopback diagnostic metrics; not benchmark-grade results",
+            "dag_nodes_appended": self.dag_nodes_appended,
+            **self.signing_counts_summary(),
             "wall_clock": self.wall_clock_summary(),
             "event_sums": self.event_sum_summary(),
             "micro_highlights": self.micro_highlights(),
@@ -498,6 +530,9 @@ class RunMetrics:
             f"signed_envelope_verify_event_ms: {micro['signed_envelope_verify_event_ms']:.3f}",
             f"signed_checkpoint_create_event_ms: {micro['signed_checkpoint_create_event_ms']:.3f}",
             f"signed_checkpoint_verify_event_ms: {micro['signed_checkpoint_verify_event_ms']:.3f}",
+            f"signed_genesis_create_event_ms: {micro['signed_genesis_create_event_ms']:.3f}",
+            f"signed_genesis_verify_event_ms: {micro['signed_genesis_verify_event_ms']:.3f}",
+            f"hot_path_signed_packet_event_ms: {micro['hot_path_signed_packet_event_ms']:.3f}",
             f"hash_bound_messages_event_us: {micro['hash_bound_messages_event_us']:.3f}",
             "",
             "Counts:",
@@ -528,6 +563,9 @@ class RunMetrics:
                 f"signed_envelope_verify_count: {signing_counts['signed_envelope_verify_count']}",
                 f"signed_checkpoint_create_count: {signing_counts['signed_checkpoint_create_count']}",
                 f"signed_checkpoint_verify_count: {signing_counts['signed_checkpoint_verify_count']}",
+                f"signed_genesis_create_count: {signing_counts['signed_genesis_create_count']}",
+                f"signed_genesis_verify_count: {signing_counts['signed_genesis_verify_count']}",
+                f"hot_path_signed_packet_count: {signing_counts['hot_path_signed_packet_count']}",
                 f"hash_bound_message_count: {signing_counts['hash_bound_message_count']}",
                 "",
                 "Delta-ready metrics:",
@@ -537,6 +575,14 @@ class RunMetrics:
                 f"signed_envelope_verify_event_ms: {micro['signed_envelope_verify_event_ms']:.3f}",
                 f"signed_checkpoint_create_event_ms: {micro['signed_checkpoint_create_event_ms']:.3f}",
                 f"signed_checkpoint_verify_event_ms: {micro['signed_checkpoint_verify_event_ms']:.3f}",
+                f"signed_genesis_create_event_ms: {micro['signed_genesis_create_event_ms']:.3f}",
+                f"signed_genesis_verify_event_ms: {micro['signed_genesis_verify_event_ms']:.3f}",
+                f"hot_path_signed_packet_event_ms: {micro['hot_path_signed_packet_event_ms']:.3f}",
+                "",
+                "DAG-genesis interpretation:",
+                "DAG-genesis mode removes AAIP packet signing from the hot path.",
+                "Only the genesis is signed.",
+                "Normal messages are hash-bound and DAG-verified.",
                 "",
                 "Slowest events:",
             ]
@@ -586,6 +632,15 @@ def summarize_metric_runs(metrics_runs: list[RunMetrics]) -> dict:
         "signed_checkpoint_verify_event_ms": lambda m: m.micro_highlights()[
             "signed_checkpoint_verify_event_ms"
         ],
+        "signed_genesis_create_event_ms": lambda m: m.micro_highlights()[
+            "signed_genesis_create_event_ms"
+        ],
+        "signed_genesis_verify_event_ms": lambda m: m.micro_highlights()[
+            "signed_genesis_verify_event_ms"
+        ],
+        "hot_path_signed_packet_event_ms": lambda m: m.micro_highlights()[
+            "hot_path_signed_packet_event_ms"
+        ],
         "signed_envelope_create_count": lambda m: m.signing_counts_summary()[
             "signed_envelope_create_count"
         ],
@@ -597,6 +652,15 @@ def summarize_metric_runs(metrics_runs: list[RunMetrics]) -> dict:
         ],
         "signed_checkpoint_verify_count": lambda m: m.signing_counts_summary()[
             "signed_checkpoint_verify_count"
+        ],
+        "signed_genesis_create_count": lambda m: m.signing_counts_summary()[
+            "signed_genesis_create_count"
+        ],
+        "signed_genesis_verify_count": lambda m: m.signing_counts_summary()[
+            "signed_genesis_verify_count"
+        ],
+        "hot_path_signed_packet_count": lambda m: m.signing_counts_summary()[
+            "hot_path_signed_packet_count"
         ],
         "hash_bound_message_count": lambda m: m.signing_counts_summary()[
             "hash_bound_message_count"
@@ -670,6 +734,9 @@ def aggregate_summary_lines(transport: str, metrics_runs: list[RunMetrics]) -> l
         "signed_envelope_verify_event_ms",
         "signed_checkpoint_create_event_ms",
         "signed_checkpoint_verify_event_ms",
+        "signed_genesis_create_event_ms",
+        "signed_genesis_verify_event_ms",
+        "hot_path_signed_packet_event_ms",
     ]:
         values = summary[name]
         lines.append(

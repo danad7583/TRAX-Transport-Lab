@@ -17,6 +17,7 @@ MESSAGE_TYPES = {
     "JUNK_STREAM_PAYLOAD",
     "TRAX_RES_ACK",
     "TRAX_CHECKPOINT",
+    "TRAX_GENESIS",
 }
 
 HEX_FIELDS = {
@@ -32,6 +33,8 @@ HEX_FIELDS = {
     "event_hash",
     "checkpoint_content_hash",
     "aggregate_hash",
+    "genesis_tip",
+    "genesis_hash",
 }
 
 REQUIRED_FIELDS = {
@@ -103,6 +106,15 @@ REQUIRED_FIELDS = {
         "payload_hash",
         "admission_envelope",
         "checkpoint_content_hash",
+    },
+    "TRAX_GENESIS": {
+        "message_type",
+        "session_id",
+        "sender_public_key",
+        "receiver_public_key",
+        "payload_hash",
+        "admission_envelope",
+        "genesis_hash",
     },
 }
 

@@ -13,6 +13,7 @@ from .messages import MessageError, decode_message, encode_message, hex_to_bytes
 from .metrics import CATEGORY_ORCHESTRATION, CATEGORY_TRANSPORT_IO, CATEGORY_TRAX, RunMetrics
 from .tcp_demo import (
     CHECKPOINT_MODE,
+    DAG_GENESIS_MODE,
     INIT_SESSION_ID_SEED,
     MODE_CHOICES,
     ProtocolError,
@@ -22,7 +23,9 @@ from .tcp_demo import (
     _make_checkpoint,
     _make_hash_bound_message,
     _make_security_message,
+    _make_signed_genesis,
     _packet_hash,
+    _validate_signed_genesis,
     _validate_hash_bound_message,
     _validate_security_message,
     security_payload,
@@ -77,10 +80,30 @@ def _server(
         with metrics.measure("server.recv_init", CATEGORY_ORCHESTRATION):
             init_session_id = adapter.hash32(INIT_SESSION_ID_SEED)
 
+            genesis = None
+            genesis_tip = None
+            if mode == DAG_GENESIS_MODE:
+                with metrics.measure("TRAX_GENESIS", CATEGORY_ORCHESTRATION):
+                    genesis, client_address = _recv_udp(sock, metrics)
+                client_public_key = hex_to_bytes(
+                    genesis["sender_public_key"], "sender_public_key", metrics=metrics
+                )
+                client_nonce = hex_to_bytes(genesis["client_nonce"], "client_nonce", metrics=metrics)
+                server_nonce = hex_to_bytes(genesis["server_nonce"], "server_nonce", metrics=metrics)
+                session_id = init_session_id
+                genesis_tip = _validate_signed_genesis(
+                    adapter,
+                    genesis,
+                    server_keys.public_key,
+                    session_id,
+                )
+                log.add("TRAX_GENESIS accepted")
+
             with metrics.measure("TRAX_INIT", CATEGORY_ORCHESTRATION):
                 init, client_address = _recv_udp(sock, metrics)
-            client_public_key = hex_to_bytes(init["sender_public_key"], "sender_public_key", metrics=metrics)
-            client_nonce = hex_to_bytes(init["client_nonce"], "client_nonce", metrics=metrics)
+            if mode != DAG_GENESIS_MODE:
+                client_public_key = hex_to_bytes(init["sender_public_key"], "sender_public_key", metrics=metrics)
+                client_nonce = hex_to_bytes(init["client_nonce"], "client_nonce", metrics=metrics)
         init_payload = security_payload(
             "TRAX_INIT",
             {
@@ -89,40 +112,80 @@ def _server(
                 "server_public_key": server_keys.public_key.hex(),
             },
         )
-        _validate_security_message(
-            adapter,
-            init,
-            "TRAX_INIT",
-            server_keys.public_key,
-            init_payload,
-            init_session_id,
-        )
+        if mode == DAG_GENESIS_MODE:
+            _validate_hash_bound_message(
+                adapter,
+                init,
+                "TRAX_INIT",
+                session_id,
+                adapter.hash32(init_payload),
+                1,
+                genesis_tip,
+                server_keys.public_key,
+                mode=DAG_GENESIS_MODE,
+                genesis_tip=genesis_tip,
+            )
+        else:
+            _validate_security_message(
+                adapter,
+                init,
+                "TRAX_INIT",
+                server_keys.public_key,
+                init_payload,
+                init_session_id,
+            )
         log.add("TRAX_INIT accepted")
 
-        server_nonce = adapter.generate_nonce()
-        transcript_hash = adapter.hash32(client_public_key + server_keys.public_key)
-        session_id = adapter.derive_session_id(transcript_hash, client_nonce, server_nonce)
-        ack_payload = security_payload(
-            "TRAX_INIT_ACK",
-            {
-                "client_nonce": client_nonce.hex(),
-                "server_nonce": server_nonce.hex(),
-                "client_public_key": client_public_key.hex(),
-                "server_public_key": server_keys.public_key.hex(),
-                "session_id": session_id.hex(),
-            },
-        )
-        init_ack = _make_security_message(
-            adapter,
-            "TRAX_INIT_ACK",
-            server_keys.private_key,
-            server_keys.public_key,
-            client_public_key,
-            session_id,
-            ack_payload,
-            client_nonce=client_nonce.hex(),
-            server_nonce=server_nonce.hex(),
-        )
+        if mode == DAG_GENESIS_MODE:
+            ack_payload = security_payload(
+                "TRAX_INIT_ACK",
+                {
+                    "client_nonce": client_nonce.hex(),
+                    "server_nonce": server_nonce.hex(),
+                    "client_public_key": client_public_key.hex(),
+                    "server_public_key": server_keys.public_key.hex(),
+                    "session_id": session_id.hex(),
+                },
+            )
+            init_ack = _make_hash_bound_message(
+                adapter,
+                "TRAX_INIT_ACK",
+                server_keys.public_key,
+                client_public_key,
+                session_id,
+                adapter.hash32(ack_payload),
+                2,
+                genesis_tip,
+                mode=DAG_GENESIS_MODE,
+                genesis_tip=genesis_tip,
+                client_nonce=client_nonce.hex(),
+                server_nonce=server_nonce.hex(),
+            )
+        else:
+            server_nonce = adapter.generate_nonce()
+            transcript_hash = adapter.hash32(client_public_key + server_keys.public_key)
+            session_id = adapter.derive_session_id(transcript_hash, client_nonce, server_nonce)
+            ack_payload = security_payload(
+                "TRAX_INIT_ACK",
+                {
+                    "client_nonce": client_nonce.hex(),
+                    "server_nonce": server_nonce.hex(),
+                    "client_public_key": client_public_key.hex(),
+                    "server_public_key": server_keys.public_key.hex(),
+                    "session_id": session_id.hex(),
+                },
+            )
+            init_ack = _make_security_message(
+                adapter,
+                "TRAX_INIT_ACK",
+                server_keys.private_key,
+                server_keys.public_key,
+                client_public_key,
+                session_id,
+                ack_payload,
+                client_nonce=client_nonce.hex(),
+                server_nonce=server_nonce.hex(),
+            )
         with metrics.measure("TRAX_INIT_ACK", CATEGORY_ORCHESTRATION):
             _send_udp(sock, init_ack, client_address, metrics)
         log.add("TRAX_INIT_ACK sent")
@@ -137,26 +200,43 @@ def _server(
                 "session_id": session_id.hex(),
             },
         )
-        _validate_security_message(
-            adapter,
-            commit,
-            "TRAX_COMMIT",
-            server_keys.public_key,
-            commit_payload,
-            session_id,
-        )
+        if mode == DAG_GENESIS_MODE:
+            _validate_hash_bound_message(
+                adapter,
+                commit,
+                "TRAX_COMMIT",
+                session_id,
+                adapter.hash32(commit_payload),
+                3,
+                genesis_tip,
+                server_keys.public_key,
+                mode=DAG_GENESIS_MODE,
+                genesis_tip=genesis_tip,
+            )
+        else:
+            _validate_security_message(
+                adapter,
+                commit,
+                "TRAX_COMMIT",
+                server_keys.public_key,
+                commit_payload,
+                session_id,
+            )
         log.add("TRAX_COMMIT accepted")
 
         with metrics.measure("dag_append_SESSION_START_V0", CATEGORY_ORCHESTRATION):
+            session_packets = {
+                "TRAX_INIT": _packet_hash(adapter, init),
+                "TRAX_INIT_ACK": _packet_hash(adapter, init_ack),
+                "TRAX_COMMIT": _packet_hash(adapter, commit),
+            }
+            if genesis is not None:
+                session_packets["TRAX_GENESIS"] = _packet_hash(adapter, genesis)
             session_node = dag.append_node(
                 "SESSION_START_V0",
                 session_id,
                 [],
-                {
-                    "TRAX_INIT": _packet_hash(adapter, init),
-                    "TRAX_INIT_ACK": _packet_hash(adapter, init_ack),
-                    "TRAX_COMMIT": _packet_hash(adapter, commit),
-                },
+                session_packets,
             )
             metrics.add_dag_node(session_node.node_hash)
         log.add("SESSION_START_V0 appended")
@@ -164,7 +244,7 @@ def _server(
         with metrics.measure("TRAX_REQ", CATEGORY_ORCHESTRATION):
             req, _ = _recv_udp(sock, metrics)
         committed_payload_hash = hex_to_bytes(req["payload_hash"], "payload_hash", metrics=metrics)
-        if mode == CHECKPOINT_MODE:
+        if mode in {CHECKPOINT_MODE, DAG_GENESIS_MODE}:
             _validate_hash_bound_message(
                 adapter,
                 req,
@@ -174,6 +254,8 @@ def _server(
                 1,
                 session_node.node_hash,
                 server_keys.public_key,
+                mode=mode,
+                genesis_tip=genesis_tip,
             )
         else:
             req_payload = security_payload(
@@ -194,7 +276,7 @@ def _server(
             )
         log.add("TRAX_REQ accepted")
 
-        if mode == CHECKPOINT_MODE:
+        if mode in {CHECKPOINT_MODE, DAG_GENESIS_MODE}:
             req_ack = _make_hash_bound_message(
                 adapter,
                 "TRAX_REQ_ACK",
@@ -204,6 +286,8 @@ def _server(
                 committed_payload_hash,
                 2,
                 session_node.node_hash,
+                mode=mode,
+                genesis_tip=genesis_tip,
                 cycle_index=req["cycle_index"],
             )
         else:
@@ -237,7 +321,7 @@ def _server(
             raise ProtocolError(junk["message_type"], "expected JUNK_STREAM_PAYLOAD")
         if hex_to_bytes(junk["session_id"], "session_id", metrics=metrics) != session_id:
             raise ProtocolError("JUNK_STREAM_PAYLOAD", "wrong session_id")
-        if mode == CHECKPOINT_MODE:
+        if mode in {CHECKPOINT_MODE, DAG_GENESIS_MODE}:
             _validate_hash_bound_message(
                 adapter,
                 junk,
@@ -246,6 +330,8 @@ def _server(
                 committed_payload_hash,
                 3,
                 session_node.node_hash,
+                mode=mode,
+                genesis_tip=genesis_tip,
             )
         payload = hex_to_bytes(junk["payload"], "payload", metrics=metrics)
         metrics.set_payload_bytes(len(payload))
@@ -254,7 +340,7 @@ def _server(
                 raise ProtocolError("JUNK_STREAM_PAYLOAD", "payload hash mismatch")
         log.add("JUNK_STREAM_PAYLOAD hash verified")
 
-        if mode == CHECKPOINT_MODE:
+        if mode in {CHECKPOINT_MODE, DAG_GENESIS_MODE}:
             res_ack = _make_hash_bound_message(
                 adapter,
                 "TRAX_RES_ACK",
@@ -264,6 +350,8 @@ def _server(
                 committed_payload_hash,
                 4,
                 session_node.node_hash,
+                mode=mode,
+                genesis_tip=genesis_tip,
                 cycle_index=req["cycle_index"],
             )
         else:
@@ -461,16 +549,45 @@ def _client(
         init_receiver = observed_server_public_key
         if adverse_case == "wrong_receiver_init":
             init_receiver = adapter.generate_keypair().public_key
-        init = _make_security_message(
-            adapter,
-            "TRAX_INIT",
-            client_keys.private_key,
-            client_keys.public_key,
-            init_receiver,
-            init_session_id,
-            init_payload,
-            client_nonce=client_nonce.hex(),
-        )
+        genesis = None
+        genesis_tip = None
+        if mode == DAG_GENESIS_MODE:
+            server_nonce = adapter.generate_nonce()
+            session_id = init_session_id
+            genesis = _make_signed_genesis(
+                adapter,
+                client_keys.private_key,
+                client_keys.public_key,
+                init_receiver,
+                session_id,
+                client_nonce,
+                server_nonce,
+            )
+            genesis_tip = _packet_hash(adapter, genesis)
+            init = _make_hash_bound_message(
+                adapter,
+                "TRAX_INIT",
+                client_keys.public_key,
+                init_receiver,
+                session_id,
+                adapter.hash32(init_payload),
+                1,
+                genesis_tip,
+                mode=DAG_GENESIS_MODE,
+                genesis_tip=genesis_tip,
+                client_nonce=client_nonce.hex(),
+            )
+        else:
+            init = _make_security_message(
+                adapter,
+                "TRAX_INIT",
+                client_keys.private_key,
+                client_keys.public_key,
+                init_receiver,
+                init_session_id,
+                init_payload,
+                client_nonce=client_nonce.hex(),
+            )
 
         if adverse_case == "malformed_init":
             with metrics.measure("udp.send_datagram", CATEGORY_TRANSPORT_IO):
@@ -481,6 +598,10 @@ def _client(
             return
 
         with metrics.measure("session_handshake_total", CATEGORY_ORCHESTRATION):
+            if mode == DAG_GENESIS_MODE:
+                with metrics.measure("TRAX_GENESIS", CATEGORY_ORCHESTRATION):
+                    _send_udp(sock, genesis, server_address, metrics)
+                log.add("TRAX_GENESIS sent")
             with metrics.measure("TRAX_INIT", CATEGORY_ORCHESTRATION):
                 _send_udp(sock, init, server_address, metrics)
             log.add("TRAX_INIT sent")
@@ -520,8 +641,9 @@ def _client(
                 init_ack, _ = _recv_udp(sock, metrics)
             server_public_key = hex_to_bytes(init_ack["sender_public_key"], "sender_public_key", metrics=metrics)
             server_nonce = hex_to_bytes(init_ack["server_nonce"], "server_nonce", metrics=metrics)
-            transcript_hash = adapter.hash32(client_keys.public_key + server_public_key)
-            session_id = adapter.derive_session_id(transcript_hash, client_nonce, server_nonce)
+            if mode != DAG_GENESIS_MODE:
+                transcript_hash = adapter.hash32(client_keys.public_key + server_public_key)
+                session_id = adapter.derive_session_id(transcript_hash, client_nonce, server_nonce)
             ack_payload = security_payload(
                 "TRAX_INIT_ACK",
                 {
@@ -532,14 +654,28 @@ def _client(
                     "session_id": session_id.hex(),
                 },
             )
-            _validate_security_message(
-                adapter,
-                init_ack,
-                "TRAX_INIT_ACK",
-                client_keys.public_key,
-                ack_payload,
-                session_id,
-            )
+            if mode == DAG_GENESIS_MODE:
+                _validate_hash_bound_message(
+                    adapter,
+                    init_ack,
+                    "TRAX_INIT_ACK",
+                    session_id,
+                    adapter.hash32(ack_payload),
+                    2,
+                    genesis_tip,
+                    client_keys.public_key,
+                    mode=DAG_GENESIS_MODE,
+                    genesis_tip=genesis_tip,
+                )
+            else:
+                _validate_security_message(
+                    adapter,
+                    init_ack,
+                    "TRAX_INIT_ACK",
+                    client_keys.public_key,
+                    ack_payload,
+                    session_id,
+                )
             log.add("TRAX_INIT_ACK accepted")
 
             commit_payload = security_payload(
@@ -553,30 +689,47 @@ def _client(
             commit_session_id = session_id
             if adverse_case == "wrong_session":
                 commit_session_id = adapter.hash32(b"wrong-udp-session")
-            commit = _make_security_message(
-                adapter,
-                "TRAX_COMMIT",
-                client_keys.private_key,
-                client_keys.public_key,
-                server_public_key,
-                commit_session_id,
-                commit_payload,
-            )
+            if mode == DAG_GENESIS_MODE:
+                commit = _make_hash_bound_message(
+                    adapter,
+                    "TRAX_COMMIT",
+                    client_keys.public_key,
+                    server_public_key,
+                    commit_session_id,
+                    adapter.hash32(commit_payload),
+                    3,
+                    genesis_tip,
+                    mode=DAG_GENESIS_MODE,
+                    genesis_tip=genesis_tip,
+                )
+            else:
+                commit = _make_security_message(
+                    adapter,
+                    "TRAX_COMMIT",
+                    client_keys.private_key,
+                    client_keys.public_key,
+                    server_public_key,
+                    commit_session_id,
+                    commit_payload,
+                )
             with metrics.measure("TRAX_COMMIT", CATEGORY_ORCHESTRATION):
                 _send_udp(sock, commit, server_address, metrics)
             log.add("TRAX_COMMIT sent")
             if adverse_case == "wrong_session":
                 return
 
+        client_session_packets = {
+            "TRAX_INIT": _packet_hash(adapter, init),
+            "TRAX_INIT_ACK": _packet_hash(adapter, init_ack),
+            "TRAX_COMMIT": _packet_hash(adapter, commit),
+        }
+        if genesis is not None:
+            client_session_packets["TRAX_GENESIS"] = _packet_hash(adapter, genesis)
         client_session_node = DemoDag().append_node(
             "SESSION_START_V0",
             session_id,
             [],
-            {
-                "TRAX_INIT": _packet_hash(adapter, init),
-                "TRAX_INIT_ACK": _packet_hash(adapter, init_ack),
-                "TRAX_COMMIT": _packet_hash(adapter, commit),
-            },
+            client_session_packets,
         )
         payload_hash = adapter.hash32(UDP_PAYLOAD)
         if adverse_case == "payload_before_ack":
@@ -594,7 +747,7 @@ def _client(
 
         with metrics.measure("stream_exchange_total", CATEGORY_ORCHESTRATION):
             previous_tip = client_session_node.node_hash
-            if mode == CHECKPOINT_MODE:
+            if mode in {CHECKPOINT_MODE, DAG_GENESIS_MODE}:
                 req = _make_hash_bound_message(
                     adapter,
                     "TRAX_REQ",
@@ -604,6 +757,8 @@ def _client(
                     payload_hash,
                     1,
                     previous_tip,
+                    mode=mode,
+                    genesis_tip=genesis_tip,
                     cycle_index=0,
                 )
             else:
@@ -636,7 +791,7 @@ def _client(
 
             with metrics.measure("TRAX_REQ_ACK", CATEGORY_ORCHESTRATION):
                 req_ack, _ = _recv_udp(sock, metrics)
-            if mode == CHECKPOINT_MODE:
+            if mode in {CHECKPOINT_MODE, DAG_GENESIS_MODE}:
                 _validate_hash_bound_message(
                     adapter,
                     req_ack,
@@ -646,6 +801,8 @@ def _client(
                     2,
                     previous_tip,
                     client_keys.public_key,
+                    mode=mode,
+                    genesis_tip=genesis_tip,
                 )
                 req["previous_tip"] = previous_tip.hex()
                 req["dag_parent_refs"] = [previous_tip.hex()]
@@ -659,6 +816,8 @@ def _client(
                     payload_hash,
                     3,
                     previous_tip,
+                    mode=mode,
+                    genesis_tip=genesis_tip,
                     cycle_index=0,
                     payload=UDP_PAYLOAD.hex(),
                 )
@@ -698,7 +857,7 @@ def _client(
 
             with metrics.measure("TRAX_RES_ACK", CATEGORY_ORCHESTRATION):
                 res_ack, _ = _recv_udp(sock, metrics)
-            if mode == CHECKPOINT_MODE:
+            if mode in {CHECKPOINT_MODE, DAG_GENESIS_MODE}:
                 _validate_hash_bound_message(
                     adapter,
                     res_ack,
@@ -708,6 +867,8 @@ def _client(
                     4,
                     previous_tip,
                     client_keys.public_key,
+                    mode=mode,
+                    genesis_tip=genesis_tip,
                 )
             else:
                 res_payload = security_payload(
