@@ -8,7 +8,8 @@ def test_tcp_repeated_run_aggregate_runs_twice():
     payload = repeated_result_payload(results)
     assert payload["ok"] is True
     assert payload["runs"] == 2
-    assert "total_duration_ms" in payload["aggregate"]
+    assert "total_wall_ms" in payload["aggregate"]
+    assert "trax_primitives_event_ms" in payload["aggregate"]
 
 
 def test_udp_repeated_run_aggregate_runs_twice():
@@ -16,4 +17,4 @@ def test_udp_repeated_run_aggregate_runs_twice():
     payload = repeated_result_payload(results)
     assert payload["ok"] is True
     assert payload["runs"] == 2
-    assert "transport_io_ms" in payload["aggregate"]
+    assert "transport_io_event_ms" in payload["aggregate"]

@@ -268,35 +268,63 @@ class RunMetrics:
         return [event.name for event in self.events]
 
     def bucket_summary(self) -> dict[str, float]:
-        buckets = {
-            f"{category}_ms": self.category_duration_ms(category)
-            for category in CATEGORIES
+        return self.event_sum_summary()
+
+    def wall_clock_summary(self) -> dict[str, float]:
+        return {
+            "total_wall_ms": self.total_duration_ns() / 1_000_000,
+            "session_handshake_wall_ms": self.named_event_total_ms(
+                "session_handshake_total"
+            ),
+            "stream_exchange_wall_ms": self.named_event_total_ms(
+                "stream_exchange_total"
+            ),
         }
-        classified_ns = sum(self.category_duration_ns(category) for category in CATEGORIES)
-        buckets["unclassified_wall_ms"] = max(
-            0, self.total_duration_ns() - classified_ns
-        ) / 1_000_000
-        return buckets
+
+    def event_sum_summary(self) -> dict[str, float]:
+        return {
+            "trax_primitives_event_ms": self.category_duration_ms(CATEGORY_TRAX),
+            "python_packaging_event_ms": self.category_duration_ms(
+                CATEGORY_PYTHON_PACKAGING
+            ),
+            "transport_io_event_ms": self.category_duration_ms(CATEGORY_TRANSPORT_IO),
+            "dag_event_ms": self.category_duration_ms(CATEGORY_DAG),
+            "orchestration_event_ms": self.category_duration_ms(CATEGORY_ORCHESTRATION),
+            "unclassified_event_ms": self.category_duration_ms(CATEGORY_UNCLASSIFIED),
+        }
+
+    def micro_highlights(self) -> dict[str, float]:
+        return {
+            "payload_hash_verify_us": self.named_event_total_us("payload_hash_verify"),
+            "trax_hash32_event_us": self.named_event_total_us("trax.hash32"),
+            "trax_create_envelope_event_us": self.named_event_total_us(
+                "trax.create_admission_envelope_v1"
+            ),
+            "trax_verify_envelope_event_us": self.named_event_total_us(
+                "trax.verify_admission_envelope_v1_for_receiver"
+            ),
+            "dag_append_event_us": self.named_event_total_us("dag.append_node"),
+        }
 
     def key_event_summary(self) -> dict[str, float]:
         summary = {
-            "session_handshake_total_ms": self.named_event_total_ms("session_handshake_total"),
-            "stream_exchange_total_ms": self.named_event_total_ms("stream_exchange_total"),
+            "session_handshake_wall_ms": self.named_event_total_ms("session_handshake_total"),
+            "stream_exchange_wall_ms": self.named_event_total_ms("stream_exchange_total"),
             "payload_hash_verify_ms": self.named_event_total_ms("payload_hash_verify"),
             "payload_hash_verify_us": self.named_event_total_us("payload_hash_verify"),
-            "create_envelope_total_ms": self.named_event_total_ms(
+            "create_envelope_event_ms": self.named_event_total_ms(
                 "trax.create_admission_envelope_v1"
             ),
-            "verify_envelope_total_ms": self.named_event_total_ms(
+            "verify_envelope_event_ms": self.named_event_total_ms(
                 "trax.verify_admission_envelope_v1_for_receiver"
             ),
-            "message_encode_total_ms": self.named_event_total_ms("message.encode"),
-            "message_decode_total_ms": self.named_event_total_ms("message.decode"),
-            "transport_send_total_ms": self.named_event_total_ms("tcp.send_frame")
+            "message_encode_event_ms": self.named_event_total_ms("message.encode"),
+            "message_decode_event_ms": self.named_event_total_ms("message.decode"),
+            "transport_send_event_ms": self.named_event_total_ms("tcp.send_frame")
             + self.named_event_total_ms("udp.send_datagram"),
-            "transport_receive_total_ms": self.named_event_total_ms("tcp.recv_frame")
+            "transport_receive_event_ms": self.named_event_total_ms("tcp.recv_frame")
             + self.named_event_total_ms("udp.recv_datagram"),
-            "dag_append_total_ms": self.named_event_total_ms("dag.append_node"),
+            "dag_append_event_ms": self.named_event_total_ms("dag.append_node"),
             "trax.hash32_total_us": self.named_event_total_us("trax.hash32"),
             "trax.verify_admission_envelope_v1_for_receiver_total_us": self.named_event_total_us(
                 "trax.verify_admission_envelope_v1_for_receiver"
@@ -311,19 +339,20 @@ class RunMetrics:
     def as_dict(self) -> dict:
         return {
             "transport": self.transport,
-            "total_duration_ns": self.total_duration_ns(),
-            "total_duration_ms": self.total_duration_ns() / 1_000_000,
-            "total_duration_us": self.total_duration_ns() / 1_000,
-            "total_bytes_sent": self.total_bytes_sent,
-            "total_bytes_received": self.total_bytes_received,
-            "frames_sent": self.frames_sent,
-            "frames_received": self.frames_received,
-            "datagrams_sent": self.datagrams_sent,
-            "datagrams_received": self.datagrams_received,
-            "payload_bytes": self.payload_bytes,
-            "dag_nodes_appended": self.dag_nodes_appended,
+            "wall_clock": self.wall_clock_summary(),
+            "event_sums": self.event_sum_summary(),
+            "micro_highlights": self.micro_highlights(),
+            "counts": {
+                "bytes_sent": self.total_bytes_sent,
+                "bytes_received": self.total_bytes_received,
+                "frames_sent": self.frames_sent,
+                "frames_received": self.frames_received,
+                "datagrams_sent": self.datagrams_sent,
+                "datagrams_received": self.datagrams_received,
+                "payload_bytes": self.payload_bytes,
+                "dag_nodes_appended": self.dag_nodes_appended,
+            },
             "final_tip": self.final_tip,
-            "bucket_summary": self.bucket_summary(),
             "key_event_summary": self.key_event_summary(),
             "events_by_category": {
                 category: [event.as_dict() for event in events]
@@ -336,13 +365,12 @@ class RunMetrics:
         return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
 
     def summary_lines(self) -> list[str]:
-        buckets = self.bucket_summary()
-        key_events = self.key_event_summary()
+        wall_clock = self.wall_clock_summary()
+        event_sums = self.event_sum_summary()
+        micro = self.micro_highlights()
         lines = [
             "Metrics:",
             f"transport: {self.transport}",
-            f"total_duration_ms: {self.total_duration_ns() / 1_000_000:.3f}",
-            f"total_duration_us: {self.total_duration_ns() / 1_000:.3f}",
             f"bytes_sent: {self.total_bytes_sent}",
             f"bytes_received: {self.total_bytes_received}",
         ]
@@ -366,26 +394,25 @@ class RunMetrics:
                 f"dag_nodes_appended: {self.dag_nodes_appended}",
                 f"final_tip: {self.final_tip or '<none>'}",
                 "",
-                "Buckets:",
-                f"trax_primitives_ms: {buckets['trax_primitives_ms']:.3f}",
-                f"python_packaging_ms: {buckets['python_packaging_ms']:.3f}",
-                f"transport_io_ms: {buckets['transport_io_ms']:.3f}",
-                f"dag_ms: {buckets['dag_ms']:.3f}",
-                f"orchestration_ms: {buckets['orchestration_ms']:.3f}",
-                f"unclassified_ms: {buckets['unclassified_wall_ms']:.3f}",
+                "Wall-clock:",
+                f"  total_wall_ms: {wall_clock['total_wall_ms']:.3f}",
+                f"  session_handshake_wall_ms: {wall_clock['session_handshake_wall_ms']:.3f}",
+                f"  stream_exchange_wall_ms: {wall_clock['stream_exchange_wall_ms']:.3f}",
                 "",
-                "Key Events:",
-                f"session_handshake_total_ms: {key_events['session_handshake_total_ms']:.3f}",
-                f"stream_exchange_total_ms: {key_events['stream_exchange_total_ms']:.3f}",
-                f"payload_hash_verify_ms: {key_events['payload_hash_verify_ms']:.3f}",
-                f"payload_hash_verify_us: {key_events['payload_hash_verify_us']:.3f}",
-                f"create_envelope_total_ms: {key_events['create_envelope_total_ms']:.3f}",
-                f"verify_envelope_total_ms: {key_events['verify_envelope_total_ms']:.3f}",
-                f"message_encode_total_ms: {key_events['message_encode_total_ms']:.3f}",
-                f"message_decode_total_ms: {key_events['message_decode_total_ms']:.3f}",
-                f"transport_send_total_ms: {key_events['transport_send_total_ms']:.3f}",
-                f"transport_receive_total_ms: {key_events['transport_receive_total_ms']:.3f}",
-                f"dag_append_total_ms: {key_events['dag_append_total_ms']:.3f}",
+                "Event sums, may overlap:",
+                f"  trax_primitives_event_ms: {event_sums['trax_primitives_event_ms']:.3f}",
+                f"  python_packaging_event_ms: {event_sums['python_packaging_event_ms']:.3f}",
+                f"  transport_io_event_ms: {event_sums['transport_io_event_ms']:.3f}",
+                f"  dag_event_ms: {event_sums['dag_event_ms']:.3f}",
+                f"  orchestration_event_ms: {event_sums['orchestration_event_ms']:.3f}",
+                f"  unclassified_event_ms: {event_sums['unclassified_event_ms']:.3f}",
+                "",
+                "Micro highlights:",
+                f"  payload_hash_verify_us: {micro['payload_hash_verify_us']:.3f}",
+                f"  trax_hash32_event_us: {micro['trax_hash32_event_us']:.3f}",
+                f"  trax_create_envelope_event_us: {micro['trax_create_envelope_event_us']:.3f}",
+                f"  trax_verify_envelope_event_us: {micro['trax_verify_envelope_event_us']:.3f}",
+                f"  dag_append_event_us: {micro['dag_append_event_us']:.3f}",
             ]
         )
         return lines
@@ -396,14 +423,26 @@ def summarize_metric_runs(metrics_runs: list[RunMetrics]) -> dict:
         raise ValueError("metrics_runs must not be empty")
 
     fields = {
-        "total_duration_ms": lambda m: m.total_duration_ns() / 1_000_000,
-        "session_handshake_ms": lambda m: m.named_event_total_ms("session_handshake_total"),
-        "stream_exchange_ms": lambda m: m.named_event_total_ms("stream_exchange_total"),
-        "payload_hash_verify_us": lambda m: m.named_event_total_us("payload_hash_verify"),
-        "trax_primitives_ms": lambda m: m.category_duration_ms(CATEGORY_TRAX),
-        "python_packaging_ms": lambda m: m.category_duration_ms(CATEGORY_PYTHON_PACKAGING),
-        "transport_io_ms": lambda m: m.category_duration_ms(CATEGORY_TRANSPORT_IO),
-        "dag_ms": lambda m: m.category_duration_ms(CATEGORY_DAG),
+        "total_wall_ms": lambda m: m.wall_clock_summary()["total_wall_ms"],
+        "session_handshake_wall_ms": lambda m: m.wall_clock_summary()[
+            "session_handshake_wall_ms"
+        ],
+        "stream_exchange_wall_ms": lambda m: m.wall_clock_summary()[
+            "stream_exchange_wall_ms"
+        ],
+        "payload_hash_verify_us": lambda m: m.micro_highlights()[
+            "payload_hash_verify_us"
+        ],
+        "trax_primitives_event_ms": lambda m: m.event_sum_summary()[
+            "trax_primitives_event_ms"
+        ],
+        "python_packaging_event_ms": lambda m: m.event_sum_summary()[
+            "python_packaging_event_ms"
+        ],
+        "transport_io_event_ms": lambda m: m.event_sum_summary()[
+            "transport_io_event_ms"
+        ],
+        "dag_event_ms": lambda m: m.event_sum_summary()["dag_event_ms"],
     }
 
     summary: dict[str, dict[str, float]] = {}
@@ -421,9 +460,32 @@ def aggregate_summary_lines(transport: str, metrics_runs: list[RunMetrics]) -> l
     summary = summarize_metric_runs(metrics_runs)
     lines = [
         f"{transport.upper()} aggregate metrics ({len(metrics_runs)} runs):",
+        "",
+        "Wall-clock:",
     ]
-    for name, values in summary.items():
+    for name in [
+        "total_wall_ms",
+        "session_handshake_wall_ms",
+        "stream_exchange_wall_ms",
+    ]:
+        values = summary[name]
         lines.append(
             f"{name}: min={values['min']:.3f} avg={values['avg']:.3f} max={values['max']:.3f}"
         )
+    lines.extend(["", "Event sums, may overlap:"])
+    for name in [
+        "trax_primitives_event_ms",
+        "python_packaging_event_ms",
+        "transport_io_event_ms",
+        "dag_event_ms",
+    ]:
+        values = summary[name]
+        lines.append(
+            f"{name}: min={values['min']:.3f} avg={values['avg']:.3f} max={values['max']:.3f}"
+        )
+    lines.extend(["", "Micro highlights:"])
+    values = summary["payload_hash_verify_us"]
+    lines.append(
+        f"payload_hash_verify_us: min={values['min']:.3f} avg={values['avg']:.3f} max={values['max']:.3f}"
+    )
     return lines

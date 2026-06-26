@@ -35,22 +35,39 @@ def comparison_payload(tcp_results, udp_results) -> dict:
 def print_text(payload: dict) -> None:
     print("TRAX Transport Lab comparison")
     print("local loopback diagnostic metrics; not benchmark-grade results")
+    print("event-sum buckets may overlap across client/server threads and nested operations")
     print()
     print(f"runs: {payload['runs']}")
     print(f"ok: {payload['ok']}")
     print()
+    print("Wall-clock averages:")
     for metric_name in [
-        "total_duration_ms",
-        "trax_primitives_ms",
-        "python_packaging_ms",
-        "transport_io_ms",
-        "dag_ms",
-        "payload_hash_verify_us",
+        "total_wall_ms",
+        "session_handshake_wall_ms",
+        "stream_exchange_wall_ms",
     ]:
         tcp_avg = payload["tcp"][metric_name]["avg"]
         udp_avg = payload["udp"][metric_name]["avg"]
         print(f"TCP avg {metric_name}: {tcp_avg:.3f}")
         print(f"UDP avg {metric_name}: {udp_avg:.3f}")
+    print()
+    print("Event-sum averages, may overlap:")
+    for metric_name in [
+        "trax_primitives_event_ms",
+        "python_packaging_event_ms",
+        "transport_io_event_ms",
+        "dag_event_ms",
+    ]:
+        tcp_avg = payload["tcp"][metric_name]["avg"]
+        udp_avg = payload["udp"][metric_name]["avg"]
+        print(f"TCP avg {metric_name}: {tcp_avg:.3f}")
+        print(f"UDP avg {metric_name}: {udp_avg:.3f}")
+    print()
+    print("Micro highlights:")
+    tcp_avg = payload["tcp"]["payload_hash_verify_us"]["avg"]
+    udp_avg = payload["udp"]["payload_hash_verify_us"]["avg"]
+    print(f"TCP avg payload_hash_verify_us: {tcp_avg:.3f}")
+    print(f"UDP avg payload_hash_verify_us: {udp_avg:.3f}")
 
 
 def main(argv: list[str] | None = None) -> int:

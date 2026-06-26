@@ -14,6 +14,10 @@ def test_tcp_and_udp_expose_comparable_metric_keys():
     tcp_buckets = set(tcp.metrics.bucket_summary())
     udp_buckets = set(udp.metrics.bucket_summary())
     assert tcp_buckets == udp_buckets
+    assert "total_wall_ms" in tcp.metrics.wall_clock_summary()
+    assert "total_wall_ms" in udp.metrics.wall_clock_summary()
+    assert "transport_io_event_ms" in tcp.metrics.event_sum_summary()
+    assert "transport_io_event_ms" in udp.metrics.event_sum_summary()
 
     tcp_events = set(tcp.metrics.key_event_summary())
     udp_events = set(udp.metrics.key_event_summary())

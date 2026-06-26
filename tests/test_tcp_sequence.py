@@ -18,8 +18,8 @@ def test_happy_path_tcp_demo():
     assert result.metrics.frames_received > 0
     assert "payload_hash_verify" in result.metrics.event_names()
     buckets = result.metrics.bucket_summary()
-    assert "trax_primitives_ms" in buckets
-    assert "python_packaging_ms" in buckets
-    assert "transport_io_ms" in buckets
-    assert "dag_ms" in buckets
-    assert result.metrics.key_event_summary()["payload_hash_verify_us"] >= 0
+    assert "trax_primitives_event_ms" in buckets
+    assert "python_packaging_event_ms" in buckets
+    assert "transport_io_event_ms" in buckets
+    assert "dag_event_ms" in buckets
+    assert result.metrics.micro_highlights()["payload_hash_verify_us"] >= 0

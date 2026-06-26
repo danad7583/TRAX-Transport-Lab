@@ -22,15 +22,20 @@ def test_run_metrics_total_duration_and_json():
     assert metrics.total_duration_ns() >= 0
     assert metrics.events[0].duration_ns >= 0
     assert '"transport":"tcp"' in metrics.to_json()
-    assert metrics.as_dict()["total_bytes_sent"] == 10
-    assert metrics.as_dict()["total_bytes_received"] == 20
+    assert metrics.as_dict()["counts"]["bytes_sent"] == 10
+    assert metrics.as_dict()["counts"]["bytes_received"] == 20
     assert set(CATEGORIES).issubset(metrics.events_by_category())
     assert metrics.category_duration_ns(CATEGORY_TRAX) >= 0
     assert metrics.category_duration_ms(CATEGORY_PYTHON_PACKAGING) >= 0
     assert metrics.named_event_total_ns("trax.hash32") >= 0
     assert metrics.named_event_total_us("trax.hash32") >= 0
-    assert "bucket_summary" in metrics.as_dict()
-    assert "key_event_summary" in metrics.as_dict()
+    assert "wall_clock" in metrics.as_dict()
+    assert "event_sums" in metrics.as_dict()
+    assert "micro_highlights" in metrics.as_dict()
+    assert "counts" in metrics.as_dict()
+    assert "total_wall_ms" in metrics.wall_clock_summary()
+    assert "trax_primitives_event_ms" in metrics.event_sum_summary()
+    assert "payload_hash_verify_us" in metrics.micro_highlights()
 
 
 def test_summary_lines_include_key_fields():
@@ -47,12 +52,13 @@ def test_summary_lines_include_key_fields():
     lines = metrics.summary_lines()
     joined = "\n".join(lines)
     assert "transport: udp" in joined
-    assert "total_duration_ms:" in joined
     assert "bytes_sent: 100" in joined
     assert "bytes_received: 200" in joined
     assert "dag_nodes_appended: 1" in joined
     assert f"final_tip: {bytes.fromhex('22' * 32).hex()}" in joined
-    assert "Buckets:" in joined
-    assert "trax_primitives_ms:" in joined
-    assert "Key Events:" in joined
+    assert "Wall-clock:" in joined
+    assert "Event sums, may overlap:" in joined
+    assert "total_wall_ms:" in joined
+    assert "trax_primitives_event_ms:" in joined
+    assert "Micro highlights:" in joined
     assert "payload_hash_verify_us:" in joined

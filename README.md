@@ -90,7 +90,6 @@ Final tip: <hash>
 
 Metrics:
 transport: tcp
-total_duration_ms: <number>
 bytes_sent: <number>
 bytes_received: <number>
 frames_sent: <number>
@@ -98,9 +97,22 @@ frames_received: <number>
 payload_bytes: <number>
 dag_nodes_appended: 2
 final_tip: <hash>
-session_handshake_ms: <number>
-stream_exchange_ms: <number>
-payload_hash_verify_ms: <number>
+
+Wall-clock:
+  total_wall_ms: <number>
+  session_handshake_wall_ms: <number>
+  stream_exchange_wall_ms: <number>
+
+Event sums, may overlap:
+  trax_primitives_event_ms: <number>
+  python_packaging_event_ms: <number>
+  transport_io_event_ms: <number>
+  dag_event_ms: <number>
+  orchestration_event_ms: <number>
+  unclassified_event_ms: <number>
+
+Micro highlights:
+  payload_hash_verify_us: <number>
 ```
 
 Expected UDP demo output includes:
@@ -134,7 +146,6 @@ Final tip: <hash>
 
 Metrics:
 transport: udp
-total_duration_ms: <number>
 bytes_sent: <number>
 bytes_received: <number>
 datagrams_sent: <number>
@@ -142,9 +153,22 @@ datagrams_received: <number>
 payload_bytes: <number>
 dag_nodes_appended: 2
 final_tip: <hash>
-session_handshake_ms: <number>
-stream_exchange_ms: <number>
-payload_hash_verify_ms: <number>
+
+Wall-clock:
+  total_wall_ms: <number>
+  session_handshake_wall_ms: <number>
+  stream_exchange_wall_ms: <number>
+
+Event sums, may overlap:
+  trax_primitives_event_ms: <number>
+  python_packaging_event_ms: <number>
+  transport_io_event_ms: <number>
+  dag_event_ms: <number>
+  orchestration_event_ms: <number>
+  unclassified_event_ms: <number>
+
+Micro highlights:
+  payload_hash_verify_us: <number>
 ```
 
 ## Demo Protocol Sequence
@@ -180,7 +204,15 @@ python -m trax_transport_lab.udp_demo --json
 python .\scripts\compare_transports.py --json --runs 10
 ```
 
-Metrics use `time.perf_counter_ns()` and are intended for local loopback comparison and regression tracking, not benchmark-grade performance claims. `total_duration_ms` includes Python runtime, sockets, thread scheduling, JSON/hex packaging, logging, metrics overhead, and TRAX calls.
+Metrics use `time.perf_counter_ns()` and are intended for local loopback comparison and regression tracking, not benchmark-grade performance claims.
+
+TRAX Transport Lab reports both wall-clock durations and event-sum durations.
+
+Wall-clock durations measure elapsed real time for the demo or major phase.
+
+Event-sum durations add up observed instrumented events. These can overlap across client/server threads, socket waits, and nested operations. Therefore event-sum buckets are useful for visibility, but they are not exclusive slices of total runtime and may exceed `total_wall_ms`.
+
+For example, `transport_io_event_ms` may be greater than `total_wall_ms` because both client and server socket waits are being summed.
 
 The metrics are broken into buckets:
 
@@ -191,7 +223,7 @@ The metrics are broken into buckets:
 - `orchestration`: demo totals, client/server run totals, thread startup/wait, and high-level sequence spans.
 - `unclassified`: wall-clock time not covered by classified event spans.
 
-Category totals are event totals, not exclusive wall-clock slices. Some events are nested, so bucket totals are best read as instrumentation totals for that category rather than a strict decomposition that sums to `total_duration_ms`.
+Use wall-clock metrics to compare end-to-end TCP vs UDP local loopback behavior. Use event-sum metrics to locate where instrumentation observed time being spent. Use micro highlights such as `payload_hash_verify_us` to reason about small TRAX primitive operations.
 
 Stable metric names include:
 
@@ -221,9 +253,9 @@ Stable metric names include:
 - `server.total`
 - `demo.total`
 
-TCP metrics include frame counts. UDP metrics include datagram counts. Both include byte totals, payload bytes, DAG nodes appended, final tip, and per-stage durations.
+TCP metrics include frame counts. UDP metrics include datagram counts. Both include byte totals, payload bytes, DAG nodes appended, final tip, wall-clock durations, event-sum buckets, and micro highlights.
 
-`payload_hash_verify_us` is closer to the light primitive path because it measures the hash-and-compare check for the committed stream payload. If `payload_hash_verify_us` is single-digit microseconds but `total_duration_ms` is tens of milliseconds, the result suggests the hash-binding primitive is light while the Python/demo/transport harness dominates end-to-end timing.
+`payload_hash_verify_us` is closer to the light primitive path because it measures the hash-and-compare check for the committed stream payload. If `payload_hash_verify_us` is single-digit microseconds but `total_wall_ms` is tens of milliseconds, the result suggests the hash-binding primitive is light while the Python/demo/transport harness dominates end-to-end timing.
 
 ## TCP and UDP Comparison
 
