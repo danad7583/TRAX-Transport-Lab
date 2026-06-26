@@ -319,7 +319,9 @@ def run_udp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = 
     )
     metrics.finish(dag.final_tip())
     if ok:
-        _append_dag_output(dag, log)
+        log.add("")
+        log.add("Final tip:")
+        log.add(dag.final_tip().hex() if dag.final_tip() else "<none>")
         log.add("")
         log.lines.extend(metrics.summary_lines())
 
@@ -570,20 +572,25 @@ def _client(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the TRAX UDP transport demo.")
     parser.add_argument("--json", action="store_true", help="emit result metrics as JSON")
+    parser.add_argument("--include-events", action="store_true", help="include raw metric events in JSON")
     parser.add_argument("--runs", type=int, default=1, help="run the demo N times")
     args = parser.parse_args(argv)
 
     if args.runs != 1:
         results = run_repeated(run_udp_demo, args.runs)
         if args.json:
-            print_repeated_json(results)
+            print_repeated_json(results, include_events=args.include_events)
         else:
             print_repeated_text(results)
         return 0 if all(result.ok for result in results) else 1
 
     result = run_udp_demo()
     if args.json:
-        print(json.dumps({"ok": result.ok, "metrics": result.metrics.as_dict()}, sort_keys=True))
+        payload = {
+            "ok": result.ok,
+            **result.metrics.as_dict(include_events=args.include_events),
+        }
+        print(json.dumps(payload, sort_keys=True))
         return 0 if result.ok else 1
 
     if result.ok:

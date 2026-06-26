@@ -294,15 +294,15 @@ class RunMetrics:
         }
 
     def micro_highlights(self) -> dict[str, float]:
+        create_us = self.named_event_total_us("trax.create_admission_envelope_v1")
+        verify_us = self.named_event_total_us("trax.verify_admission_envelope_v1_for_receiver")
         return {
             "payload_hash_verify_us": self.named_event_total_us("payload_hash_verify"),
             "trax_hash32_event_us": self.named_event_total_us("trax.hash32"),
-            "trax_create_envelope_event_us": self.named_event_total_us(
-                "trax.create_admission_envelope_v1"
-            ),
-            "trax_verify_envelope_event_us": self.named_event_total_us(
-                "trax.verify_admission_envelope_v1_for_receiver"
-            ),
+            "trax_create_envelope_event_us": create_us,
+            "trax_create_envelope_event_ms": create_us / 1_000,
+            "trax_verify_envelope_event_us": verify_us,
+            "trax_verify_envelope_event_ms": verify_us / 1_000,
             "dag_append_event_us": self.named_event_total_us("dag.append_node"),
         }
 
@@ -336,30 +336,73 @@ class RunMetrics:
         }
         return summary
 
-    def as_dict(self) -> dict:
+    def counts_summary(self) -> dict[str, int]:
+        return {
+            "bytes_sent": self.total_bytes_sent,
+            "bytes_received": self.total_bytes_received,
+            "frames_sent": self.frames_sent,
+            "frames_received": self.frames_received,
+            "datagrams_sent": self.datagrams_sent,
+            "datagrams_received": self.datagrams_received,
+            "payload_bytes": self.payload_bytes,
+            "dag_nodes_appended": self.dag_nodes_appended,
+        }
+
+    def slowest_events(
+        self,
+        limit: int = 10,
+        *,
+        include_categories: set[str] | None = None,
+    ) -> list[dict]:
+        events = [
+            event for event in self.events
+            if include_categories is None or event.category in include_categories
+        ]
+        events = sorted(events, key=lambda event: max(0, event.duration_ns), reverse=True)
+        return [
+            {
+                "name": event.name,
+                "category": event.category,
+                "duration_ms": max(0, event.duration_ns) / 1_000_000,
+                "duration_us": max(0, event.duration_ns) / 1_000,
+                "bytes_sent": event.bytes_sent,
+                "bytes_received": event.bytes_received,
+                "frames_sent": event.frames_sent,
+                "frames_received": event.frames_received,
+                "datagrams_sent": event.datagrams_sent,
+                "datagrams_received": event.datagrams_received,
+                "ok": event.ok,
+                "detail": event.detail,
+            }
+            for event in events[:limit]
+        ]
+
+    def compact_dict(self) -> dict:
         return {
             "transport": self.transport,
+            "note": "local loopback diagnostic metrics; not benchmark-grade results",
             "wall_clock": self.wall_clock_summary(),
             "event_sums": self.event_sum_summary(),
             "micro_highlights": self.micro_highlights(),
-            "counts": {
-                "bytes_sent": self.total_bytes_sent,
-                "bytes_received": self.total_bytes_received,
-                "frames_sent": self.frames_sent,
-                "frames_received": self.frames_received,
-                "datagrams_sent": self.datagrams_sent,
-                "datagrams_received": self.datagrams_received,
-                "payload_bytes": self.payload_bytes,
-                "dag_nodes_appended": self.dag_nodes_appended,
-            },
+            "counts": self.counts_summary(),
             "final_tip": self.final_tip,
             "key_event_summary": self.key_event_summary(),
+            "slowest_events": self.slowest_events(10),
+        }
+
+    def full_dict(self) -> dict:
+        payload = self.compact_dict()
+        payload.update({
             "events_by_category": {
                 category: [event.as_dict() for event in events]
                 for category, events in self.events_by_category().items()
             },
             "events": [event.as_dict() for event in self.events],
-        }
+        })
+        return payload
+
+    def as_dict(self, include_events: bool = False) -> dict:
+        return self.full_dict() if include_events else self.compact_dict()
 
     def to_json(self) -> str:
         return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
@@ -368,53 +411,67 @@ class RunMetrics:
         wall_clock = self.wall_clock_summary()
         event_sums = self.event_sum_summary()
         micro = self.micro_highlights()
+        counts = self.counts_summary()
         lines = [
-            "Metrics:",
-            f"transport: {self.transport}",
-            f"bytes_sent: {self.total_bytes_sent}",
-            f"bytes_received: {self.total_bytes_received}",
+            "Wall-clock:",
+            f"total_wall_ms: {wall_clock['total_wall_ms']:.3f}",
+            f"session_handshake_wall_ms: {wall_clock['session_handshake_wall_ms']:.3f}",
+            f"stream_exchange_wall_ms: {wall_clock['stream_exchange_wall_ms']:.3f}",
+            "",
+            "Event sums, may overlap:",
+            f"trax_primitives_event_ms: {event_sums['trax_primitives_event_ms']:.3f}",
+            f"python_packaging_event_ms: {event_sums['python_packaging_event_ms']:.3f}",
+            f"transport_io_event_ms: {event_sums['transport_io_event_ms']:.3f}",
+            f"dag_event_ms: {event_sums['dag_event_ms']:.3f}",
+            f"orchestration_event_ms: {event_sums['orchestration_event_ms']:.3f}",
+            f"unclassified_event_ms: {event_sums['unclassified_event_ms']:.3f}",
+            "",
+            "Primitive highlights:",
+            f"payload_hash_verify_us: {micro['payload_hash_verify_us']:.3f}",
+            f"dag_append_event_us: {micro['dag_append_event_us']:.3f}",
+            f"trax_hash32_event_us: {micro['trax_hash32_event_us']:.3f}",
+            f"trax_create_envelope_event_us: {micro['trax_create_envelope_event_us']:.3f}",
+            f"trax_create_envelope_event_ms: {micro['trax_create_envelope_event_ms']:.3f}",
+            f"trax_verify_envelope_event_us: {micro['trax_verify_envelope_event_us']:.3f}",
+            f"trax_verify_envelope_event_ms: {micro['trax_verify_envelope_event_ms']:.3f}",
+            "",
+            "Counts:",
+            f"bytes_sent: {counts['bytes_sent']}",
+            f"bytes_received: {counts['bytes_received']}",
         ]
         if self.transport == "tcp":
             lines.extend(
                 [
-                    f"frames_sent: {self.frames_sent}",
-                    f"frames_received: {self.frames_received}",
+                    f"frames_sent: {counts['frames_sent']}",
+                    f"frames_received: {counts['frames_received']}",
                 ]
             )
         if self.transport == "udp":
             lines.extend(
                 [
-                    f"datagrams_sent: {self.datagrams_sent}",
-                    f"datagrams_received: {self.datagrams_received}",
+                    f"datagrams_sent: {counts['datagrams_sent']}",
+                    f"datagrams_received: {counts['datagrams_received']}",
                 ]
             )
         lines.extend(
             [
-                f"payload_bytes: {self.payload_bytes}",
-                f"dag_nodes_appended: {self.dag_nodes_appended}",
-                f"final_tip: {self.final_tip or '<none>'}",
+                f"payload_bytes: {counts['payload_bytes']}",
+                f"dag_nodes_appended: {counts['dag_nodes_appended']}",
                 "",
-                "Wall-clock:",
-                f"  total_wall_ms: {wall_clock['total_wall_ms']:.3f}",
-                f"  session_handshake_wall_ms: {wall_clock['session_handshake_wall_ms']:.3f}",
-                f"  stream_exchange_wall_ms: {wall_clock['stream_exchange_wall_ms']:.3f}",
-                "",
-                "Event sums, may overlap:",
-                f"  trax_primitives_event_ms: {event_sums['trax_primitives_event_ms']:.3f}",
-                f"  python_packaging_event_ms: {event_sums['python_packaging_event_ms']:.3f}",
-                f"  transport_io_event_ms: {event_sums['transport_io_event_ms']:.3f}",
-                f"  dag_event_ms: {event_sums['dag_event_ms']:.3f}",
-                f"  orchestration_event_ms: {event_sums['orchestration_event_ms']:.3f}",
-                f"  unclassified_event_ms: {event_sums['unclassified_event_ms']:.3f}",
-                "",
-                "Micro highlights:",
-                f"  payload_hash_verify_us: {micro['payload_hash_verify_us']:.3f}",
-                f"  trax_hash32_event_us: {micro['trax_hash32_event_us']:.3f}",
-                f"  trax_create_envelope_event_us: {micro['trax_create_envelope_event_us']:.3f}",
-                f"  trax_verify_envelope_event_us: {micro['trax_verify_envelope_event_us']:.3f}",
-                f"  dag_append_event_us: {micro['dag_append_event_us']:.3f}",
+                "Slowest events:",
             ]
         )
+        for index, event in enumerate(self.slowest_events(10), start=1):
+            lines.append(
+                f"{index}. {event['name']} [{event['category']}] {event['duration_ms']:.3f} ms"
+            )
+        lines.extend([
+            "",
+            "Interpretation:",
+            "local loopback diagnostic metrics; not benchmark-grade results",
+            "wall-clock values measure elapsed demo time",
+            "event-sum values may overlap across client/server threads and nested operations",
+        ])
         return lines
 
 
@@ -432,6 +489,14 @@ def summarize_metric_runs(metrics_runs: list[RunMetrics]) -> dict:
         ],
         "payload_hash_verify_us": lambda m: m.micro_highlights()[
             "payload_hash_verify_us"
+        ],
+        "dag_append_event_us": lambda m: m.micro_highlights()["dag_append_event_us"],
+        "trax_hash32_event_us": lambda m: m.micro_highlights()["trax_hash32_event_us"],
+        "trax_create_envelope_event_ms": lambda m: m.micro_highlights()[
+            "trax_create_envelope_event_ms"
+        ],
+        "trax_verify_envelope_event_ms": lambda m: m.micro_highlights()[
+            "trax_verify_envelope_event_ms"
         ],
         "trax_primitives_event_ms": lambda m: m.event_sum_summary()[
             "trax_primitives_event_ms"
@@ -483,9 +548,16 @@ def aggregate_summary_lines(transport: str, metrics_runs: list[RunMetrics]) -> l
         lines.append(
             f"{name}: min={values['min']:.3f} avg={values['avg']:.3f} max={values['max']:.3f}"
         )
-    lines.extend(["", "Micro highlights:"])
-    values = summary["payload_hash_verify_us"]
-    lines.append(
-        f"payload_hash_verify_us: min={values['min']:.3f} avg={values['avg']:.3f} max={values['max']:.3f}"
-    )
+    lines.extend(["", "Primitive highlights:"])
+    for name in [
+        "payload_hash_verify_us",
+        "dag_append_event_us",
+        "trax_hash32_event_us",
+        "trax_create_envelope_event_ms",
+        "trax_verify_envelope_event_ms",
+    ]:
+        values = summary[name]
+        lines.append(
+            f"{name}: min={values['min']:.3f} avg={values['avg']:.3f} max={values['max']:.3f}"
+        )
     return lines

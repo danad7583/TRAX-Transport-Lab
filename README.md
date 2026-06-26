@@ -58,6 +58,8 @@ python -m trax_transport_lab.tcp_demo
 python -m trax_transport_lab.udp_demo
 python -m trax_transport_lab.tcp_demo --json
 python -m trax_transport_lab.udp_demo --json
+python -m trax_transport_lab.tcp_demo --json --include-events
+python -m trax_transport_lab.udp_demo --json --include-events
 ```
 
 Or:
@@ -111,8 +113,29 @@ Event sums, may overlap:
   orchestration_event_ms: <number>
   unclassified_event_ms: <number>
 
-Micro highlights:
+Primitive highlights:
   payload_hash_verify_us: <number>
+  dag_append_event_us: <number>
+  trax_hash32_event_us: <number>
+  trax_create_envelope_event_ms: <number>
+  trax_verify_envelope_event_ms: <number>
+
+Counts:
+bytes_sent: <number>
+bytes_received: <number>
+frames_sent: <number>
+frames_received: <number>
+payload_bytes: <number>
+dag_nodes_appended: 2
+
+Slowest events:
+1. client.total [orchestration] <number> ms
+2. server.total [orchestration] <number> ms
+
+Interpretation:
+local loopback diagnostic metrics; not benchmark-grade results
+wall-clock values measure elapsed demo time
+event-sum values may overlap across client/server threads and nested operations
 ```
 
 Expected UDP demo output includes:
@@ -167,8 +190,29 @@ Event sums, may overlap:
   orchestration_event_ms: <number>
   unclassified_event_ms: <number>
 
-Micro highlights:
+Primitive highlights:
   payload_hash_verify_us: <number>
+  dag_append_event_us: <number>
+  trax_hash32_event_us: <number>
+  trax_create_envelope_event_ms: <number>
+  trax_verify_envelope_event_ms: <number>
+
+Counts:
+bytes_sent: <number>
+bytes_received: <number>
+datagrams_sent: <number>
+datagrams_received: <number>
+payload_bytes: <number>
+dag_nodes_appended: 2
+
+Slowest events:
+1. client.total [orchestration] <number> ms
+2. server.total [orchestration] <number> ms
+
+Interpretation:
+local loopback diagnostic metrics; not benchmark-grade results
+wall-clock values measure elapsed demo time
+event-sum values may overlap across client/server threads and nested operations
 ```
 
 ## Demo Protocol Sequence
@@ -201,10 +245,21 @@ python -m trax_transport_lab.udp_demo --runs 10
 python .\scripts\compare_transports.py --runs 10
 python -m trax_transport_lab.tcp_demo --json
 python -m trax_transport_lab.udp_demo --json
+python -m trax_transport_lab.udp_demo --json --include-events
 python .\scripts\compare_transports.py --json --runs 10
+python .\scripts\compare_transports.py --json --runs 5 --include-events
 ```
 
 Metrics use `time.perf_counter_ns()` and are intended for local loopback comparison and regression tracking, not benchmark-grade performance claims.
+
+Default JSON is compact. It includes wall-clock summaries, event-sum summaries, primitive highlights, counts, slowest events, final tip, and key event totals. It does not include raw `events` or `events_by_category`.
+
+Use `--include-events` when you need raw event dumps:
+
+```powershell
+python -m trax_transport_lab.udp_demo --json --include-events
+python .\scripts\compare_transports.py --json --runs 5 --include-events
+```
 
 TRAX Transport Lab reports both wall-clock durations and event-sum durations.
 
@@ -224,6 +279,16 @@ The metrics are broken into buckets:
 - `unclassified`: wall-clock time not covered by classified event spans.
 
 Use wall-clock metrics to compare end-to-end TCP vs UDP local loopback behavior. Use event-sum metrics to locate where instrumentation observed time being spent. Use micro highlights such as `payload_hash_verify_us` to reason about small TRAX primitive operations.
+
+Slowest events help identify major observed costs without dumping every raw event. Primitive highlights separate hash binding, DAG append, envelope creation, and envelope verification:
+
+- `payload_hash_verify_us`
+- `dag_append_event_us`
+- `trax_hash32_event_us`
+- `trax_create_envelope_event_us`
+- `trax_create_envelope_event_ms`
+- `trax_verify_envelope_event_us`
+- `trax_verify_envelope_event_ms`
 
 Stable metric names include:
 
@@ -256,6 +321,10 @@ Stable metric names include:
 TCP metrics include frame counts. UDP metrics include datagram counts. Both include byte totals, payload bytes, DAG nodes appended, final tip, wall-clock durations, event-sum buckets, and micro highlights.
 
 `payload_hash_verify_us` is closer to the light primitive path because it measures the hash-and-compare check for the committed stream payload. If `payload_hash_verify_us` is single-digit microseconds but `total_wall_ms` is tens of milliseconds, the result suggests the hash-binding primitive is light while the Python/demo/transport harness dominates end-to-end timing.
+
+If `payload_hash_verify_us` is around 10-20 microseconds while admission envelope create/verify totals are tens of milliseconds, then payload binding is lightweight while direct Ed25519 admission envelope work dominates TRAX primitive event-sum time in this Python loopback harness.
+
+These are local diagnostic measurements, not benchmark-grade claims.
 
 ## TCP and UDP Comparison
 

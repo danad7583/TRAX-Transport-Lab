@@ -24,9 +24,12 @@ def run_repeated(run_once, runs: int) -> list[TransportDemoResult]:
     return [run_once() for _ in range(runs)]
 
 
-def repeated_result_payload(results: list[TransportDemoResult]) -> dict:
+def repeated_result_payload(
+    results: list[TransportDemoResult],
+    include_events: bool = False,
+) -> dict:
     metrics_runs = [result.metrics for result in results]
-    return {
+    payload = {
         "ok": all(result.ok for result in results),
         "runs": len(results),
         "transport": results[0].transport if results else "<none>",
@@ -39,11 +42,12 @@ def repeated_result_payload(results: list[TransportDemoResult]) -> dict:
             {
                 "ok": result.ok,
                 "final_tip": result.final_tip.hex() if result.final_tip else None,
-                "metrics": result.metrics.as_dict(),
+                "metrics": result.metrics.as_dict(include_events=include_events),
             }
             for result in results
         ],
     }
+    return payload
 
 
 def print_repeated_text(results: list[TransportDemoResult]) -> None:
@@ -60,5 +64,8 @@ def print_repeated_text(results: list[TransportDemoResult]) -> None:
         print(line)
 
 
-def print_repeated_json(results: list[TransportDemoResult]) -> None:
-    print(json.dumps(repeated_result_payload(results), sort_keys=True))
+def print_repeated_json(
+    results: list[TransportDemoResult],
+    include_events: bool = False,
+) -> None:
+    print(json.dumps(repeated_result_payload(results, include_events=include_events), sort_keys=True))
