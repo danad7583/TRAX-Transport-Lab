@@ -2,6 +2,8 @@ from dataclasses import dataclass
 import hashlib
 import json
 
+from .metrics import CATEGORY_DAG, RunMetrics
+
 
 NODE_TYPES = {"SESSION_START_V0", "STREAM_EXCHANGE_V0"}
 
@@ -34,10 +36,23 @@ def _hex_list(values: list[bytes]) -> list[str]:
 
 
 class DemoDag:
-    def __init__(self):
+    def __init__(self, metrics: RunMetrics | None = None):
         self._nodes: list[DemoDagNode] = []
+        self.metrics = metrics
 
     def append_node(
+        self,
+        node_type: str,
+        session_id: bytes,
+        parent_hashes: list[bytes],
+        packet_hashes: dict[str, bytes],
+    ) -> DemoDagNode:
+        if self.metrics is not None:
+            with self.metrics.measure("dag.append_node", CATEGORY_DAG):
+                return self._append_node(node_type, session_id, parent_hashes, packet_hashes)
+        return self._append_node(node_type, session_id, parent_hashes, packet_hashes)
+
+    def _append_node(
         self,
         node_type: str,
         session_id: bytes,
@@ -64,12 +79,20 @@ class DemoDag:
                 key: packet_hashes[key].hex() for key in sorted(packet_hashes)
             },
         }
-        content_hash = _hash_bytes(_canonical_json(content_obj))
+        if self.metrics is None:
+            content_hash = _hash_bytes(_canonical_json(content_obj))
+        else:
+            with self.metrics.measure("dag.content_hash", CATEGORY_DAG):
+                content_hash = _hash_bytes(_canonical_json(content_obj))
         node_obj = {
             **content_obj,
             "content_hash": content_hash.hex(),
         }
-        node_hash = _hash_bytes(_canonical_json(node_obj))
+        if self.metrics is None:
+            node_hash = _hash_bytes(_canonical_json(node_obj))
+        else:
+            with self.metrics.measure("dag.node_hash", CATEGORY_DAG):
+                node_hash = _hash_bytes(_canonical_json(node_obj))
         node = DemoDagNode(
             index=index,
             node_type=node_type,
@@ -83,6 +106,12 @@ class DemoDag:
         return node
 
     def final_tip(self) -> bytes | None:
+        if self.metrics is not None:
+            with self.metrics.measure("dag.final_tip", CATEGORY_DAG):
+                return self._final_tip()
+        return self._final_tip()
+
+    def _final_tip(self) -> bytes | None:
         if not self._nodes:
             return None
         return self._nodes[-1].node_hash

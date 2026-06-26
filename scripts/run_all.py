@@ -21,6 +21,7 @@ def main() -> int:
         ("Run tests", [sys.executable, "-m", "pytest"]),
         ("Run TCP demo", [sys.executable, "-m", "trax_transport_lab.tcp_demo"]),
         ("Run UDP demo", [sys.executable, "-m", "trax_transport_lab.udp_demo"]),
+        ("Compare transports", [sys.executable, "scripts/compare_transports.py"]),
     ]
 
     try:

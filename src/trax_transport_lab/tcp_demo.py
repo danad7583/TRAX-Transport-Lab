@@ -5,6 +5,7 @@ import json
 import struct
 import socket
 import threading
+from time import perf_counter_ns
 from typing import Any
 
 from .dag_model import DemoDag, DemoDagNode
@@ -15,7 +16,7 @@ from .framing import (
     send_frame,
 )
 from .logging_utils import DemoLog
-from .metrics import RunMetrics
+from .metrics import CATEGORY_ORCHESTRATION, CATEGORY_TRAX, RunMetrics
 from .messages import (
     MessageError,
     canonical_json,
@@ -24,7 +25,12 @@ from .messages import (
     hex_to_bytes,
 )
 from .trax_adapter import TraxAdapter
-from .transport_common import TransportDemoResult
+from .transport_common import (
+    TransportDemoResult,
+    print_repeated_json,
+    print_repeated_text,
+    run_repeated,
+)
 
 
 INIT_SESSION_ID_SEED = b"TRAX_TRANSPORT_LAB_INIT_SESSION_V0"
@@ -47,21 +53,17 @@ def security_payload(message_type: str, fields: dict[str, Any]) -> bytes:
 
 
 def _packet_hash(adapter: TraxAdapter, message: dict[str, Any]) -> bytes:
-    return adapter.hash32(encode_message(message))
+    return adapter.hash32(encode_message(message, metrics=adapter.metrics))
 
 
 def _send_tcp(sock: socket.socket, message: dict[str, Any], metrics: RunMetrics) -> None:
-    data = encode_message(message)
-    send_frame(sock, data)
-    metrics.add_frame_sent()
-    metrics.add_bytes_sent(len(data) + 4)
+    data = encode_message(message, metrics=metrics)
+    send_frame(sock, data, metrics=metrics)
 
 
 def _recv_tcp(sock: socket.socket, metrics: RunMetrics) -> dict[str, Any]:
-    data = recv_frame(sock, MAX_PACKET_LEN)
-    metrics.add_frame_received()
-    metrics.add_bytes_received(len(data) + 4)
-    return decode_message(data)
+    data = recv_frame(sock, MAX_PACKET_LEN, metrics=metrics)
+    return decode_message(data, metrics=metrics)
 
 
 def _validate_security_message(
@@ -129,32 +131,34 @@ def _server(
     server_keys,
 ) -> None:
     conn: socket.socket | None = None
+    server_started_ns = perf_counter_ns()
     try:
-        conn, _ = listener.accept()
-        conn.settimeout(SOCKET_TIMEOUT_SECONDS)
-        init_session_id = adapter.hash32(INIT_SESSION_ID_SEED)
+        with metrics.measure("server.accept_init", CATEGORY_ORCHESTRATION):
+            conn, _ = listener.accept()
+            conn.settimeout(SOCKET_TIMEOUT_SECONDS)
+            init_session_id = adapter.hash32(INIT_SESSION_ID_SEED)
 
-        with metrics.measure("TRAX_INIT"):
-            init = _recv_tcp(conn, metrics)
-        client_public_key = hex_to_bytes(init["sender_public_key"], "sender_public_key")
-        client_nonce = hex_to_bytes(init["client_nonce"], "client_nonce")
-        init_payload = security_payload(
-            "TRAX_INIT",
-            {
-                "client_nonce": client_nonce.hex(),
-                "client_public_key": client_public_key.hex(),
-                "server_public_key": server_keys.public_key.hex(),
-            },
-        )
-        _validate_security_message(
-            adapter,
-            init,
-            "TRAX_INIT",
-            server_keys.public_key,
-            init_payload,
-            init_session_id,
-        )
-        log.add("TRAX_INIT accepted")
+            with metrics.measure("TRAX_INIT", CATEGORY_ORCHESTRATION):
+                init = _recv_tcp(conn, metrics)
+            client_public_key = hex_to_bytes(init["sender_public_key"], "sender_public_key", metrics=metrics)
+            client_nonce = hex_to_bytes(init["client_nonce"], "client_nonce", metrics=metrics)
+            init_payload = security_payload(
+                "TRAX_INIT",
+                {
+                    "client_nonce": client_nonce.hex(),
+                    "client_public_key": client_public_key.hex(),
+                    "server_public_key": server_keys.public_key.hex(),
+                },
+            )
+            _validate_security_message(
+                adapter,
+                init,
+                "TRAX_INIT",
+                server_keys.public_key,
+                init_payload,
+                init_session_id,
+            )
+            log.add("TRAX_INIT accepted")
 
         server_nonce = adapter.generate_nonce()
         transcript_hash = adapter.hash32(client_public_key + server_keys.public_key)
@@ -180,11 +184,11 @@ def _server(
             client_nonce=client_nonce.hex(),
             server_nonce=server_nonce.hex(),
         )
-        with metrics.measure("TRAX_INIT_ACK"):
+        with metrics.measure("TRAX_INIT_ACK", CATEGORY_ORCHESTRATION):
             _send_tcp(conn, init_ack, metrics)
         log.add("TRAX_INIT_ACK sent")
 
-        with metrics.measure("TRAX_COMMIT"):
+        with metrics.measure("TRAX_COMMIT", CATEGORY_ORCHESTRATION):
             commit = _recv_tcp(conn, metrics)
         commit_payload = security_payload(
             "TRAX_COMMIT",
@@ -203,7 +207,7 @@ def _server(
             session_id,
         )
         log.add("TRAX_COMMIT accepted")
-        with metrics.measure("dag_append_SESSION_START_V0"):
+        with metrics.measure("dag_append_SESSION_START_V0", CATEGORY_ORCHESTRATION):
             session_node = dag.append_node(
                 "SESSION_START_V0",
                 session_id,
@@ -217,7 +221,7 @@ def _server(
             metrics.add_dag_node(session_node.node_hash)
         log.add("SESSION_START_V0 appended")
 
-        with metrics.measure("TRAX_REQ"):
+        with metrics.measure("TRAX_REQ", CATEGORY_ORCHESTRATION):
             req = _recv_tcp(conn, metrics)
         committed_payload_hash = hex_to_bytes(req["payload_hash"], "payload_hash")
         req_payload = security_payload(
@@ -258,19 +262,19 @@ def _server(
             cycle_index=req["cycle_index"],
             payload_hash=committed_payload_hash.hex(),
         )
-        with metrics.measure("TRAX_REQ_ACK"):
+        with metrics.measure("TRAX_REQ_ACK", CATEGORY_ORCHESTRATION):
             _send_tcp(conn, req_ack, metrics)
         log.add("TRAX_REQ_ACK sent")
 
-        with metrics.measure("JUNK_STREAM_PAYLOAD"):
+        with metrics.measure("JUNK_STREAM_PAYLOAD", CATEGORY_ORCHESTRATION):
             junk = _recv_tcp(conn, metrics)
         if junk["message_type"] != "JUNK_STREAM_PAYLOAD":
             raise ProtocolError(junk["message_type"], "expected JUNK_STREAM_PAYLOAD")
-        if hex_to_bytes(junk["session_id"], "session_id") != session_id:
+        if hex_to_bytes(junk["session_id"], "session_id", metrics=metrics) != session_id:
             raise ProtocolError("JUNK_STREAM_PAYLOAD", "wrong session_id")
-        payload = hex_to_bytes(junk["payload"], "payload")
+        payload = hex_to_bytes(junk["payload"], "payload", metrics=metrics)
         metrics.set_payload_bytes(len(payload))
-        with metrics.measure("payload_hash_verify"):
+        with metrics.measure("payload_hash_verify", CATEGORY_TRAX):
             if adapter.hash32(payload) != committed_payload_hash:
                 raise ProtocolError("JUNK_STREAM_PAYLOAD", "payload hash mismatch")
         log.add("JUNK_STREAM_PAYLOAD hash verified")
@@ -295,10 +299,10 @@ def _server(
             cycle_index=req["cycle_index"],
             payload_hash=committed_payload_hash.hex(),
         )
-        with metrics.measure("TRAX_RES_ACK"):
+        with metrics.measure("TRAX_RES_ACK", CATEGORY_ORCHESTRATION):
             _send_tcp(conn, res_ack, metrics)
         log.add("TRAX_RES_ACK sent")
-        with metrics.measure("dag_append_STREAM_EXCHANGE_V0"):
+        with metrics.measure("dag_append_STREAM_EXCHANGE_V0", CATEGORY_ORCHESTRATION):
             stream_node = dag.append_node(
                 "STREAM_EXCHANGE_V0",
                 session_id,
@@ -317,17 +321,27 @@ def _server(
     except (MessageError, FramingError, OSError, KeyError, ValueError) as exc:
         log.reject("<unknown>", str(exc))
     finally:
+        server_ended_ns = perf_counter_ns()
+        metrics.record_event(
+            "server.total",
+            CATEGORY_ORCHESTRATION,
+            server_started_ns,
+            server_ended_ns,
+        )
         if conn is not None:
             conn.close()
         listener.close()
 
 
 def run_tcp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = None) -> TcpDemoResult:
-    adapter = adapter or TraxAdapter()
-    dag = DemoDag()
-    log = DemoLog()
     metrics = RunMetrics("tcp")
-    server_keys = adapter.generate_keypair()
+    demo_started_ns = perf_counter_ns()
+    adapter = adapter or TraxAdapter(metrics=metrics)
+    adapter.metrics = metrics
+    dag = DemoDag(metrics=metrics)
+    log = DemoLog()
+    with metrics.measure("demo.thread_startup", CATEGORY_ORCHESTRATION):
+        server_keys = adapter.generate_keypair()
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", 0))
@@ -338,11 +352,13 @@ def run_tcp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = 
     server_thread = threading.Thread(
         target=_server, args=(listener, adapter, dag, log, metrics, server_keys), daemon=True
     )
-    server_thread.start()
+    with metrics.measure("server.thread_start", CATEGORY_ORCHESTRATION):
+        server_thread.start()
 
     error: str | None = None
     try:
-        _client(host, port, adapter, log, metrics, adverse_case, server_keys.public_key)
+        with metrics.measure("client.total", CATEGORY_ORCHESTRATION):
+            _client(host, port, adapter, log, metrics, adverse_case, server_keys.public_key)
     except ProtocolError as exc:
         log.reject(exc.message_type, exc.reason)
         error = exc.reason
@@ -350,13 +366,22 @@ def run_tcp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = 
         log.reject("<client>", str(exc))
         error = str(exc)
 
-    server_thread.join(SOCKET_TIMEOUT_SECONDS + 1.0)
+    with metrics.measure("server.thread_join", CATEGORY_ORCHESTRATION):
+        server_thread.join(SOCKET_TIMEOUT_SECONDS + 1.0)
     if server_thread.is_alive():
         error = error or "server thread did not finish"
         log.reject("<server>", error)
 
     ok = error is None and len(dag) == 2 and not any(
         line.startswith("rejected ") for line in log.lines
+    )
+    demo_ended_ns = perf_counter_ns()
+    metrics.record_event(
+        "demo.total",
+        CATEGORY_ORCHESTRATION,
+        demo_started_ns,
+        demo_ended_ns,
+        ok=ok,
     )
     metrics.finish(dag.final_tip())
     if ok:
@@ -429,8 +454,8 @@ def _client(
             log.add("TRAX_INIT sent")
             return
 
-        with metrics.measure("session_handshake_total"):
-            with metrics.measure("TRAX_INIT"):
+        with metrics.measure("session_handshake_total", CATEGORY_ORCHESTRATION):
+            with metrics.measure("TRAX_INIT", CATEGORY_ORCHESTRATION):
                 _send_tcp(sock, init, metrics)
             log.add("TRAX_INIT sent")
 
@@ -454,12 +479,12 @@ def _client(
                     bad_req_payload,
                     cycle_index=0,
                 )
-                with metrics.measure("TRAX_REQ"):
+                with metrics.measure("TRAX_REQ", CATEGORY_ORCHESTRATION):
                     _send_tcp(sock, bad_req, metrics)
                 log.add("TRAX_REQ sent")
                 return
 
-            with metrics.measure("TRAX_INIT_ACK"):
+            with metrics.measure("TRAX_INIT_ACK", CATEGORY_ORCHESTRATION):
                 init_ack = _recv_tcp(sock, metrics)
             server_public_key = hex_to_bytes(init_ack["sender_public_key"], "sender_public_key")
             server_nonce = hex_to_bytes(init_ack["server_nonce"], "server_nonce")
@@ -509,7 +534,7 @@ def _client(
             )
             if adverse_case == "bad_commit":
                 commit["admission_envelope"] = "00"
-            with metrics.measure("TRAX_COMMIT"):
+            with metrics.measure("TRAX_COMMIT", CATEGORY_ORCHESTRATION):
                 _send_tcp(sock, commit, metrics)
             log.add("TRAX_COMMIT sent")
             if adverse_case in {"bad_commit", "wrong_session"}:
@@ -524,12 +549,12 @@ def _client(
                 "payload_hash": payload_hash.hex(),
                 "cycle_index": 0,
             }
-            with metrics.measure("JUNK_STREAM_PAYLOAD"):
+            with metrics.measure("JUNK_STREAM_PAYLOAD", CATEGORY_ORCHESTRATION):
                 _send_tcp(sock, junk, metrics)
             log.add("JUNK_STREAM_PAYLOAD sent")
             return
 
-        with metrics.measure("stream_exchange_total"):
+        with metrics.measure("stream_exchange_total", CATEGORY_ORCHESTRATION):
             req_payload = security_payload(
                 "TRAX_REQ",
                 {
@@ -551,7 +576,7 @@ def _client(
             )
             if adverse_case == "wrong_message_order":
                 req["message_type"] = "TRAX_RES_ACK"
-            with metrics.measure("TRAX_REQ"):
+            with metrics.measure("TRAX_REQ", CATEGORY_ORCHESTRATION):
                 _send_tcp(sock, req, metrics)
             log.add("TRAX_REQ sent")
             if adverse_case == "wrong_message_order":
@@ -564,7 +589,7 @@ def _client(
                 "payload_hash": payload_hash.hex(),
                 "cycle_index": 0,
             }
-            with metrics.measure("TRAX_REQ_ACK"):
+            with metrics.measure("TRAX_REQ_ACK", CATEGORY_ORCHESTRATION):
                 req_ack = _recv_tcp(sock, metrics)
             req_ack_payload = security_payload(
                 "TRAX_REQ_ACK",
@@ -586,13 +611,13 @@ def _client(
 
             if adverse_case == "payload_hash_mismatch":
                 junk["payload"] = (JUNK_PAYLOAD + b"tampered").hex()
-            with metrics.measure("JUNK_STREAM_PAYLOAD"):
+            with metrics.measure("JUNK_STREAM_PAYLOAD", CATEGORY_ORCHESTRATION):
                 _send_tcp(sock, junk, metrics)
             log.add("JUNK_STREAM_PAYLOAD sent")
             if adverse_case == "payload_hash_mismatch":
                 return
 
-            with metrics.measure("TRAX_RES_ACK"):
+            with metrics.measure("TRAX_RES_ACK", CATEGORY_ORCHESTRATION):
                 res_ack = _recv_tcp(sock, metrics)
             res_ack_payload = security_payload(
                 "TRAX_RES_ACK",
@@ -626,7 +651,16 @@ def _append_dag_output(dag: DemoDag, log: DemoLog) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the TRAX TCP transport demo.")
     parser.add_argument("--json", action="store_true", help="emit result metrics as JSON")
+    parser.add_argument("--runs", type=int, default=1, help="run the demo N times")
     args = parser.parse_args(argv)
+
+    if args.runs != 1:
+        results = run_repeated(run_tcp_demo, args.runs)
+        if args.json:
+            print_repeated_json(results)
+        else:
+            print_repeated_text(results)
+        return 0 if all(result.ok for result in results) else 1
 
     result = run_tcp_demo()
     if args.json:

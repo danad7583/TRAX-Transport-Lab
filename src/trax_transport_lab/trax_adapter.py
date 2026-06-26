@@ -1,7 +1,10 @@
 import hashlib
 import importlib
 from dataclasses import dataclass
+from contextlib import nullcontext
 from typing import Any
+
+from .metrics import CATEGORY_TRAX, RunMetrics
 
 
 class TraxAdapterError(RuntimeError):
@@ -15,9 +18,15 @@ class KeyPair:
 
 
 class TraxAdapter:
-    def __init__(self, module: Any | None = None):
+    def __init__(self, module: Any | None = None, metrics: RunMetrics | None = None):
         self.trax = module if module is not None else importlib.import_module("trax")
+        self.metrics = metrics
         self._validate_api()
+
+    def _measure(self, name: str):
+        if self.metrics is None:
+            return nullcontext()
+        return self.metrics.measure(name, CATEGORY_TRAX)
 
     def _validate_api(self) -> None:
         required = [
@@ -35,7 +44,8 @@ class TraxAdapter:
             raise TraxAdapterError(f"trax module missing: {', '.join(missing)}")
 
     def generate_keypair(self) -> KeyPair:
-        keypair = self.trax.generate_keypair()
+        with self._measure("trax.generate_keypair"):
+            keypair = self.trax.generate_keypair()
         private_key = keypair["private_key"]
         public_key = bytes(keypair["public_key"])
         if len(public_key) != 32:
@@ -43,13 +53,15 @@ class TraxAdapter:
         return KeyPair(private_key=private_key, public_key=public_key)
 
     def generate_nonce(self) -> bytes:
-        nonce = bytes(self.trax.generate_nonce())
+        with self._measure("trax.generate_nonce"):
+            nonce = bytes(self.trax.generate_nonce())
         if len(nonce) != 16:
             raise TraxAdapterError("TRAX nonce must be 16 bytes")
         return nonce
 
     def hash32(self, data: bytes) -> bytes:
-        digest = bytes(self.trax.hash32(data))
+        with self._measure("trax.hash32"):
+            digest = bytes(self.trax.hash32(data))
         if len(digest) != 32:
             raise TraxAdapterError("TRAX hash32 must return 32 bytes")
         return digest
@@ -60,9 +72,10 @@ class TraxAdapter:
         client_nonce: bytes,
         server_nonce: bytes,
     ) -> bytes:
-        session_id = bytes(
-            self.trax.derive_session_id(transcript_hash, client_nonce, server_nonce)
-        )
+        with self._measure("trax.derive_session_id"):
+            session_id = bytes(
+                self.trax.derive_session_id(transcript_hash, client_nonce, server_nonce)
+            )
         if len(session_id) != 32:
             raise TraxAdapterError("TRAX session_id must be 32 bytes")
         return session_id
@@ -79,20 +92,7 @@ class TraxAdapter:
     ) -> bytes:
         nonce = self.generate_nonce()
         try:
-            return bytes(
-                self.trax.create_admission_envelope_v1(
-                    private_key,
-                    receiver_public_key,
-                    session_id,
-                    nonce,
-                    payload,
-                    message_type,
-                    dag_parent_refs or [],
-                    proof_type,
-                )
-            )
-        except ValueError as exc:
-            if proof_type != "none":
+            with self._measure("trax.create_admission_envelope_v1"):
                 return bytes(
                     self.trax.create_admission_envelope_v1(
                         private_key,
@@ -102,9 +102,24 @@ class TraxAdapter:
                         payload,
                         message_type,
                         dag_parent_refs or [],
-                        "none",
+                        proof_type,
                     )
                 )
+        except ValueError as exc:
+            if proof_type != "none":
+                with self._measure("trax.create_admission_envelope_v1"):
+                    return bytes(
+                        self.trax.create_admission_envelope_v1(
+                            private_key,
+                            receiver_public_key,
+                            session_id,
+                            nonce,
+                            payload,
+                            message_type,
+                            dag_parent_refs or [],
+                            "none",
+                        )
+                    )
             raise TraxAdapterError(str(exc)) from exc
 
     def verify_for_receiver(
@@ -114,16 +129,18 @@ class TraxAdapter:
         receiver_public_key: bytes,
     ) -> bool:
         try:
-            return bool(
-                self.trax.verify_admission_envelope_v1_for_receiver(
-                    envelope, payload, receiver_public_key
+            with self._measure("trax.verify_admission_envelope_v1_for_receiver"):
+                return bool(
+                    self.trax.verify_admission_envelope_v1_for_receiver(
+                        envelope, payload, receiver_public_key
+                    )
                 )
-            )
         except ValueError:
             return False
 
     def decode_envelope(self, envelope: bytes) -> dict[str, Any]:
-        return dict(self.trax.decode_admission_envelope_v1(envelope))
+        with self._measure("trax.decode_admission_envelope_v1"):
+            return dict(self.trax.decode_admission_envelope_v1(envelope))
 
 
 class DevelopmentFallbackTraxAdapter(TraxAdapter):
@@ -136,6 +153,7 @@ class DevelopmentFallbackTraxAdapter(TraxAdapter):
 
     def __init__(self):
         self.trax = None
+        self.metrics = None
 
     def _validate_api(self) -> None:
         return None

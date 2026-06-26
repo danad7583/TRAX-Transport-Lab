@@ -170,11 +170,28 @@ The logical sequence is the same for TCP frames and UDP datagrams:
 Both demos return a `RunMetrics` object and print a text metrics section. The `--json` option emits machine-readable metrics:
 
 ```powershell
+python -m trax_transport_lab.tcp_demo
+python -m trax_transport_lab.udp_demo
+python -m trax_transport_lab.tcp_demo --runs 10
+python -m trax_transport_lab.udp_demo --runs 10
+python .\scripts\compare_transports.py --runs 10
 python -m trax_transport_lab.tcp_demo --json
 python -m trax_transport_lab.udp_demo --json
+python .\scripts\compare_transports.py --json --runs 10
 ```
 
-Metrics use `time.perf_counter_ns()` and are intended for local loopback comparison and regression tracking, not benchmark-grade performance claims.
+Metrics use `time.perf_counter_ns()` and are intended for local loopback comparison and regression tracking, not benchmark-grade performance claims. `total_duration_ms` includes Python runtime, sockets, thread scheduling, JSON/hex packaging, logging, metrics overhead, and TRAX calls.
+
+The metrics are broken into buckets:
+
+- `trax_primitives`: direct calls into the `trax` Python binding, including `hash32`, nonce generation, session derivation, envelope creation, envelope verification, and envelope decode.
+- `python_packaging`: deterministic JSON encoding/decoding, hex conversion, and demo message hashing.
+- `transport_io`: TCP frame send/receive and UDP datagram send/receive.
+- `dag`: demo DAG append, content hash, node hash, and final-tip operations.
+- `orchestration`: demo totals, client/server run totals, thread startup/wait, and high-level sequence spans.
+- `unclassified`: wall-clock time not covered by classified event spans.
+
+Category totals are event totals, not exclusive wall-clock slices. Some events are nested, so bucket totals are best read as instrumentation totals for that category rather than a strict decomposition that sums to `total_duration_ms`.
 
 Stable metric names include:
 
@@ -190,8 +207,23 @@ Stable metric names include:
 - `dag_append_SESSION_START_V0`
 - `dag_append_STREAM_EXCHANGE_V0`
 - `payload_hash_verify`
+- `trax.hash32`
+- `trax.create_admission_envelope_v1`
+- `trax.verify_admission_envelope_v1_for_receiver`
+- `message.encode`
+- `message.decode`
+- `tcp.send_frame`
+- `tcp.recv_frame`
+- `udp.send_datagram`
+- `udp.recv_datagram`
+- `dag.append_node`
+- `client.total`
+- `server.total`
+- `demo.total`
 
 TCP metrics include frame counts. UDP metrics include datagram counts. Both include byte totals, payload bytes, DAG nodes appended, final tip, and per-stage durations.
+
+`payload_hash_verify_us` is closer to the light primitive path because it measures the hash-and-compare check for the committed stream payload. If `payload_hash_verify_us` is single-digit microseconds but `total_duration_ms` is tens of milliseconds, the result suggests the hash-binding primitive is light while the Python/demo/transport harness dominates end-to-end timing.
 
 ## TCP and UDP Comparison
 
