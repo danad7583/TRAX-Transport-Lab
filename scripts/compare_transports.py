@@ -12,12 +12,12 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from trax_transport_lab.metrics import summarize_metric_runs
-from trax_transport_lab.tcp_demo import run_tcp_demo
+from trax_transport_lab.tcp_demo import MODE_CHOICES, SIGNED_ENVELOPE_MODE, run_tcp_demo
 from trax_transport_lab.udp_demo import run_udp_demo
 
 
-def run_many(fn, runs: int):
-    return [fn() for _ in range(runs)]
+def run_many(fn, runs: int, mode: str):
+    return [fn(mode=mode) for _ in range(runs)]
 
 
 def _faster_transport(payload: dict) -> str:
@@ -28,12 +28,19 @@ def _faster_transport(payload: dict) -> str:
     return "tcp" if tcp_avg < udp_avg else "udp"
 
 
-def comparison_payload(tcp_results, udp_results, include_events: bool = False) -> dict:
+def comparison_payload(
+    tcp_results,
+    udp_results,
+    include_events: bool = False,
+    mode: str | None = None,
+) -> dict:
     tcp_metrics = [result.metrics for result in tcp_results]
     udp_metrics = [result.metrics for result in udp_results]
+    selected_mode = mode or (tcp_metrics[0].mode if tcp_metrics else SIGNED_ENVELOPE_MODE)
     payload = {
         "note": "local loopback diagnostic metrics; not benchmark-grade results",
         "runs": len(tcp_results),
+        "mode": selected_mode,
         "ok": all(result.ok for result in tcp_results + udp_results),
         "tcp": summarize_metric_runs(tcp_metrics),
         "udp": summarize_metric_runs(udp_metrics),
@@ -72,6 +79,7 @@ def print_text(payload: dict) -> None:
     print("event-sum buckets may overlap across client/server threads and nested operations")
     print()
     print(f"runs: {payload['runs']}")
+    print(f"mode: {payload['mode']}")
     print(f"ok: {payload['ok']}")
     print()
     print("Wall-clock averages:")
@@ -120,6 +128,7 @@ def print_text(payload: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compare TCP and UDP local loopback metrics.")
     parser.add_argument("--runs", type=int, default=5, help="number of runs per transport")
+    parser.add_argument("--mode", choices=MODE_CHOICES, default=SIGNED_ENVELOPE_MODE)
     parser.add_argument("--json", action="store_true", help="emit JSON only")
     parser.add_argument("--include-events", action="store_true", help="include raw per-run metric events in JSON")
     args = parser.parse_args(argv)
@@ -127,9 +136,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.runs < 1:
         raise SystemExit("--runs must be >= 1")
 
-    tcp_results = run_many(run_tcp_demo, args.runs)
-    udp_results = run_many(run_udp_demo, args.runs)
-    payload = comparison_payload(tcp_results, udp_results, include_events=args.include_events)
+    tcp_results = run_many(run_tcp_demo, args.runs, args.mode)
+    udp_results = run_many(run_udp_demo, args.runs, args.mode)
+    payload = comparison_payload(
+        tcp_results,
+        udp_results,
+        include_events=args.include_events,
+        mode=args.mode,
+    )
     if args.json:
         print(json.dumps(payload, sort_keys=True))
     else:

@@ -60,6 +60,10 @@ python -m trax_transport_lab.tcp_demo --json
 python -m trax_transport_lab.udp_demo --json
 python -m trax_transport_lab.tcp_demo --json --include-events
 python -m trax_transport_lab.udp_demo --json --include-events
+python -m trax_transport_lab.tcp_demo --mode signed-envelope
+python -m trax_transport_lab.tcp_demo --mode checkpoint
+python -m trax_transport_lab.udp_demo --mode signed-envelope
+python -m trax_transport_lab.udp_demo --mode checkpoint
 ```
 
 Or:
@@ -233,6 +237,31 @@ The logical sequence is the same for TCP frames and UDP datagrams:
 10. Client verifies `TRAX_RES_ACK`.
 11. The demo prints DAG enumeration and the final tip.
 
+## Signed-envelope mode vs checkpoint mode
+
+TRAX Transport Lab can run the same TCP and UDP demos in two experimental modes:
+
+- `signed-envelope` / signed-envelope-mode signs every TRAX protocol message envelope. This is conservative and easy to reason about, but expensive.
+- `checkpoint` / checkpoint-mode signs session/checkpoint state and hash-binds intermediate events into the DAG.
+
+Checkpoint mode demonstrates the intended TRAX performance model: packets carry evidence, DAGs carry continuity, signatures seal checkpoints.
+
+Run the modes directly:
+
+```powershell
+python -m trax_transport_lab.udp_demo --mode signed-envelope
+python -m trax_transport_lab.udp_demo --mode checkpoint
+python .\scripts\compare_modes.py --runs 10
+python .\scripts\compare_modes.py --transport udp --runs 10
+python .\scripts\compare_transports.py --mode checkpoint --runs 10
+```
+
+In checkpoint mode, the stream messages are hash-bound, counter-bound, session-bound, previous-tip-bound, and DAG-bound. The final checkpoint signs a compact summary of the segment and appends `CHECKPOINT_V0`.
+
+If checkpoint mode reduces signed envelope create/verify event time while preserving payload hash verification, DAG continuity, and final checkpoint verification, then the lab demonstrates why TRAX should sign continuity checkpoints instead of every packet.
+
+These are local loopback diagnostic metrics, not benchmark-grade claims.
+
 ## Metrics
 
 Both demos return a `RunMetrics` object and print a text metrics section. The `--json` option emits machine-readable metrics:
@@ -243,6 +272,8 @@ python -m trax_transport_lab.udp_demo
 python -m trax_transport_lab.tcp_demo --runs 10
 python -m trax_transport_lab.udp_demo --runs 10
 python .\scripts\compare_transports.py --runs 10
+python .\scripts\compare_transports.py --mode checkpoint --runs 10
+python .\scripts\compare_modes.py --runs 10
 python -m trax_transport_lab.tcp_demo --json
 python -m trax_transport_lab.udp_demo --json
 python -m trax_transport_lab.udp_demo --json --include-events

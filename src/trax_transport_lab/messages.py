@@ -16,6 +16,7 @@ MESSAGE_TYPES = {
     "TRAX_REQ_ACK",
     "JUNK_STREAM_PAYLOAD",
     "TRAX_RES_ACK",
+    "TRAX_CHECKPOINT",
 }
 
 HEX_FIELDS = {
@@ -27,6 +28,10 @@ HEX_FIELDS = {
     "payload_hash",
     "admission_envelope",
     "payload",
+    "previous_tip",
+    "event_hash",
+    "checkpoint_content_hash",
+    "aggregate_hash",
 }
 
 REQUIRED_FIELDS = {
@@ -89,6 +94,15 @@ REQUIRED_FIELDS = {
         "payload_hash",
         "admission_envelope",
         "cycle_index",
+    },
+    "TRAX_CHECKPOINT": {
+        "message_type",
+        "session_id",
+        "sender_public_key",
+        "receiver_public_key",
+        "payload_hash",
+        "admission_envelope",
+        "checkpoint_content_hash",
     },
 }
 
@@ -204,3 +218,8 @@ def validate_message(message: dict[str, Any], metrics: RunMetrics | None = None)
         cycle_index = message["cycle_index"]
         if not isinstance(cycle_index, int) or cycle_index < 0:
             raise MessageError("cycle_index must be a non-negative integer")
+
+    if "counter" in message:
+        counter = message["counter"]
+        if not isinstance(counter, int) or counter < 0:
+            raise MessageError("counter must be a non-negative integer")

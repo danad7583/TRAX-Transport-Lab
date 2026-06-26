@@ -5,7 +5,7 @@ import json
 from .metrics import CATEGORY_DAG, RunMetrics
 
 
-NODE_TYPES = {"SESSION_START_V0", "STREAM_EXCHANGE_V0"}
+NODE_TYPES = {"SESSION_START_V0", "STREAM_EXCHANGE_V0", "CHECKPOINT_V0"}
 
 
 class DagError(ValueError):

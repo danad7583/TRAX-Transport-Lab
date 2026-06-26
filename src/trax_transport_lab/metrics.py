@@ -28,6 +28,11 @@ KEY_EVENT_NAMES = [
     "session_handshake_total",
     "stream_exchange_total",
     "payload_hash_verify",
+    "signed_envelope.create",
+    "signed_envelope.verify",
+    "checkpoint.create_signed_checkpoint",
+    "checkpoint.verify_signed_checkpoint",
+    "hash_bound.message",
     "trax.create_admission_envelope_v1",
     "trax.verify_admission_envelope_v1_for_receiver",
     "message.encode",
@@ -101,6 +106,7 @@ class _Measurement:
 @dataclass
 class RunMetrics:
     transport: str
+    mode: str = "signed-envelope"
     events: list[MetricEvent] = field(default_factory=list)
     total_bytes_sent: int = 0
     total_bytes_received: int = 0
@@ -110,6 +116,11 @@ class RunMetrics:
     datagrams_received: int = 0
     payload_bytes: int = 0
     dag_nodes_appended: int = 0
+    signed_envelope_create_count: int = 0
+    signed_envelope_verify_count: int = 0
+    signed_checkpoint_create_count: int = 0
+    signed_checkpoint_verify_count: int = 0
+    hash_bound_message_count: int = 0
     final_tip: str | None = None
     started_ns: int = field(default_factory=perf_counter_ns)
     ended_ns: int | None = None
@@ -225,6 +236,26 @@ class RunMetrics:
             if final_tip is not None:
                 self.final_tip = final_tip.hex()
 
+    def add_signed_envelope_create(self) -> None:
+        with self._lock:
+            self.signed_envelope_create_count += 1
+
+    def add_signed_envelope_verify(self) -> None:
+        with self._lock:
+            self.signed_envelope_verify_count += 1
+
+    def add_signed_checkpoint_create(self) -> None:
+        with self._lock:
+            self.signed_checkpoint_create_count += 1
+
+    def add_signed_checkpoint_verify(self) -> None:
+        with self._lock:
+            self.signed_checkpoint_verify_count += 1
+
+    def add_hash_bound_message(self) -> None:
+        with self._lock:
+            self.hash_bound_message_count += 1
+
     def set_payload_bytes(self, byte_count: int) -> None:
         with self._lock:
             self.payload_bytes = byte_count
@@ -303,6 +334,19 @@ class RunMetrics:
             "trax_create_envelope_event_ms": create_us / 1_000,
             "trax_verify_envelope_event_us": verify_us,
             "trax_verify_envelope_event_ms": verify_us / 1_000,
+            "signed_envelope_create_event_ms": self.named_event_total_ms(
+                "signed_envelope.create"
+            ),
+            "signed_envelope_verify_event_ms": self.named_event_total_ms(
+                "signed_envelope.verify"
+            ),
+            "signed_checkpoint_create_event_ms": self.named_event_total_ms(
+                "checkpoint.create_signed_checkpoint"
+            ),
+            "signed_checkpoint_verify_event_ms": self.named_event_total_ms(
+                "checkpoint.verify_signed_checkpoint"
+            ),
+            "hash_bound_messages_event_us": self.named_event_total_us("hash_bound.message"),
             "dag_append_event_us": self.named_event_total_us("dag.append_node"),
         }
 
@@ -336,6 +380,15 @@ class RunMetrics:
         }
         return summary
 
+    def signing_counts_summary(self) -> dict[str, int]:
+        return {
+            "signed_envelope_create_count": self.signed_envelope_create_count,
+            "signed_envelope_verify_count": self.signed_envelope_verify_count,
+            "signed_checkpoint_create_count": self.signed_checkpoint_create_count,
+            "signed_checkpoint_verify_count": self.signed_checkpoint_verify_count,
+            "hash_bound_message_count": self.hash_bound_message_count,
+        }
+
     def counts_summary(self) -> dict[str, int]:
         return {
             "bytes_sent": self.total_bytes_sent,
@@ -346,6 +399,7 @@ class RunMetrics:
             "datagrams_received": self.datagrams_received,
             "payload_bytes": self.payload_bytes,
             "dag_nodes_appended": self.dag_nodes_appended,
+            **self.signing_counts_summary(),
         }
 
     def slowest_events(
@@ -380,11 +434,13 @@ class RunMetrics:
     def compact_dict(self) -> dict:
         return {
             "transport": self.transport,
+            "mode": self.mode,
             "note": "local loopback diagnostic metrics; not benchmark-grade results",
             "wall_clock": self.wall_clock_summary(),
             "event_sums": self.event_sum_summary(),
             "micro_highlights": self.micro_highlights(),
             "counts": self.counts_summary(),
+            "signing_counts": self.signing_counts_summary(),
             "final_tip": self.final_tip,
             "key_event_summary": self.key_event_summary(),
             "slowest_events": self.slowest_events(10),
@@ -412,7 +468,11 @@ class RunMetrics:
         event_sums = self.event_sum_summary()
         micro = self.micro_highlights()
         counts = self.counts_summary()
+        signing_counts = self.signing_counts_summary()
         lines = [
+            "Mode:",
+            self.mode,
+            "",
             "Wall-clock:",
             f"total_wall_ms: {wall_clock['total_wall_ms']:.3f}",
             f"session_handshake_wall_ms: {wall_clock['session_handshake_wall_ms']:.3f}",
@@ -434,6 +494,11 @@ class RunMetrics:
             f"trax_create_envelope_event_ms: {micro['trax_create_envelope_event_ms']:.3f}",
             f"trax_verify_envelope_event_us: {micro['trax_verify_envelope_event_us']:.3f}",
             f"trax_verify_envelope_event_ms: {micro['trax_verify_envelope_event_ms']:.3f}",
+            f"signed_envelope_create_event_ms: {micro['signed_envelope_create_event_ms']:.3f}",
+            f"signed_envelope_verify_event_ms: {micro['signed_envelope_verify_event_ms']:.3f}",
+            f"signed_checkpoint_create_event_ms: {micro['signed_checkpoint_create_event_ms']:.3f}",
+            f"signed_checkpoint_verify_event_ms: {micro['signed_checkpoint_verify_event_ms']:.3f}",
+            f"hash_bound_messages_event_us: {micro['hash_bound_messages_event_us']:.3f}",
             "",
             "Counts:",
             f"bytes_sent: {counts['bytes_sent']}",
@@ -457,6 +522,21 @@ class RunMetrics:
             [
                 f"payload_bytes: {counts['payload_bytes']}",
                 f"dag_nodes_appended: {counts['dag_nodes_appended']}",
+                "",
+                "Signing counts:",
+                f"signed_envelope_create_count: {signing_counts['signed_envelope_create_count']}",
+                f"signed_envelope_verify_count: {signing_counts['signed_envelope_verify_count']}",
+                f"signed_checkpoint_create_count: {signing_counts['signed_checkpoint_create_count']}",
+                f"signed_checkpoint_verify_count: {signing_counts['signed_checkpoint_verify_count']}",
+                f"hash_bound_message_count: {signing_counts['hash_bound_message_count']}",
+                "",
+                "Delta-ready metrics:",
+                f"payload_hash_verify_us: {micro['payload_hash_verify_us']:.3f}",
+                f"dag_append_event_us: {micro['dag_append_event_us']:.3f}",
+                f"signed_envelope_create_event_ms: {micro['signed_envelope_create_event_ms']:.3f}",
+                f"signed_envelope_verify_event_ms: {micro['signed_envelope_verify_event_ms']:.3f}",
+                f"signed_checkpoint_create_event_ms: {micro['signed_checkpoint_create_event_ms']:.3f}",
+                f"signed_checkpoint_verify_event_ms: {micro['signed_checkpoint_verify_event_ms']:.3f}",
                 "",
                 "Slowest events:",
             ]
@@ -491,6 +571,36 @@ def summarize_metric_runs(metrics_runs: list[RunMetrics]) -> dict:
             "payload_hash_verify_us"
         ],
         "dag_append_event_us": lambda m: m.micro_highlights()["dag_append_event_us"],
+        "hash_bound_messages_event_us": lambda m: m.micro_highlights()[
+            "hash_bound_messages_event_us"
+        ],
+        "signed_envelope_create_event_ms": lambda m: m.micro_highlights()[
+            "signed_envelope_create_event_ms"
+        ],
+        "signed_envelope_verify_event_ms": lambda m: m.micro_highlights()[
+            "signed_envelope_verify_event_ms"
+        ],
+        "signed_checkpoint_create_event_ms": lambda m: m.micro_highlights()[
+            "signed_checkpoint_create_event_ms"
+        ],
+        "signed_checkpoint_verify_event_ms": lambda m: m.micro_highlights()[
+            "signed_checkpoint_verify_event_ms"
+        ],
+        "signed_envelope_create_count": lambda m: m.signing_counts_summary()[
+            "signed_envelope_create_count"
+        ],
+        "signed_envelope_verify_count": lambda m: m.signing_counts_summary()[
+            "signed_envelope_verify_count"
+        ],
+        "signed_checkpoint_create_count": lambda m: m.signing_counts_summary()[
+            "signed_checkpoint_create_count"
+        ],
+        "signed_checkpoint_verify_count": lambda m: m.signing_counts_summary()[
+            "signed_checkpoint_verify_count"
+        ],
+        "hash_bound_message_count": lambda m: m.signing_counts_summary()[
+            "hash_bound_message_count"
+        ],
         "trax_hash32_event_us": lambda m: m.micro_highlights()["trax_hash32_event_us"],
         "trax_create_envelope_event_ms": lambda m: m.micro_highlights()[
             "trax_create_envelope_event_ms"
@@ -552,9 +662,14 @@ def aggregate_summary_lines(transport: str, metrics_runs: list[RunMetrics]) -> l
     for name in [
         "payload_hash_verify_us",
         "dag_append_event_us",
+        "hash_bound_messages_event_us",
         "trax_hash32_event_us",
         "trax_create_envelope_event_ms",
         "trax_verify_envelope_event_ms",
+        "signed_envelope_create_event_ms",
+        "signed_envelope_verify_event_ms",
+        "signed_checkpoint_create_event_ms",
+        "signed_checkpoint_verify_event_ms",
     ]:
         values = summary[name]
         lines.append(

@@ -33,6 +33,7 @@ def repeated_result_payload(
         "ok": all(result.ok for result in results),
         "runs": len(results),
         "transport": results[0].transport if results else "<none>",
+        "mode": results[0].metrics.mode if results else "<none>",
         "final_tips": [
             result.final_tip.hex() if result.final_tip is not None else None
             for result in results
@@ -54,7 +55,9 @@ def print_repeated_text(results: list[TransportDemoResult]) -> None:
     if not results:
         return
     transport = results[0].transport
+    mode = results[0].metrics.mode
     print(f"{transport.upper()} repeated runs")
+    print(f"mode: {mode}")
     print()
     for index, result in enumerate(results, start=1):
         tip = result.final_tip.hex() if result.final_tip else "<none>"

@@ -12,11 +12,18 @@ from .logging_utils import DemoLog
 from .messages import MessageError, decode_message, encode_message, hex_to_bytes
 from .metrics import CATEGORY_ORCHESTRATION, CATEGORY_TRANSPORT_IO, CATEGORY_TRAX, RunMetrics
 from .tcp_demo import (
+    CHECKPOINT_MODE,
     INIT_SESSION_ID_SEED,
+    MODE_CHOICES,
     ProtocolError,
-    _append_dag_output,
+    SIGNED_ENVELOPE_MODE,
+    _checkpoint_payload_from_message,
+    _hash_bound_material,
+    _make_checkpoint,
+    _make_hash_bound_message,
     _make_security_message,
     _packet_hash,
+    _validate_hash_bound_message,
     _validate_security_message,
     security_payload,
 )
@@ -62,6 +69,7 @@ def _server(
     log: DemoLog,
     metrics: RunMetrics,
     server_keys,
+    mode: str,
 ) -> None:
     client_address = None
     server_started_ns = perf_counter_ns()
@@ -156,44 +164,69 @@ def _server(
         with metrics.measure("TRAX_REQ", CATEGORY_ORCHESTRATION):
             req, _ = _recv_udp(sock, metrics)
         committed_payload_hash = hex_to_bytes(req["payload_hash"], "payload_hash", metrics=metrics)
-        req_payload = security_payload(
-            "TRAX_REQ",
-            {
-                "cycle_index": req["cycle_index"],
-                "payload_hash": committed_payload_hash.hex(),
-                "session_id": session_id.hex(),
-            },
-        )
-        _validate_security_message(
-            adapter,
-            req,
-            "TRAX_REQ",
-            server_keys.public_key,
-            req_payload,
-            session_id,
-        )
+        if mode == CHECKPOINT_MODE:
+            _validate_hash_bound_message(
+                adapter,
+                req,
+                "TRAX_REQ",
+                session_id,
+                committed_payload_hash,
+                1,
+                session_node.node_hash,
+                server_keys.public_key,
+            )
+        else:
+            req_payload = security_payload(
+                "TRAX_REQ",
+                {
+                    "cycle_index": req["cycle_index"],
+                    "payload_hash": committed_payload_hash.hex(),
+                    "session_id": session_id.hex(),
+                },
+            )
+            _validate_security_message(
+                adapter,
+                req,
+                "TRAX_REQ",
+                server_keys.public_key,
+                req_payload,
+                session_id,
+            )
         log.add("TRAX_REQ accepted")
 
-        req_ack_payload = security_payload(
-            "TRAX_REQ_ACK",
-            {
-                "cycle_index": req["cycle_index"],
-                "payload_hash": committed_payload_hash.hex(),
-                "session_id": session_id.hex(),
-            },
-        )
-        req_ack = _make_security_message(
-            adapter,
-            "TRAX_REQ_ACK",
-            server_keys.private_key,
-            server_keys.public_key,
-            client_public_key,
-            session_id,
-            req_ack_payload,
-            dag_parent_refs=[session_node.node_hash],
-            cycle_index=req["cycle_index"],
-            payload_hash=committed_payload_hash.hex(),
-        )
+        if mode == CHECKPOINT_MODE:
+            req_ack = _make_hash_bound_message(
+                adapter,
+                "TRAX_REQ_ACK",
+                server_keys.public_key,
+                client_public_key,
+                session_id,
+                committed_payload_hash,
+                2,
+                session_node.node_hash,
+                cycle_index=req["cycle_index"],
+            )
+        else:
+            req_ack_payload = security_payload(
+                "TRAX_REQ_ACK",
+                {
+                    "cycle_index": req["cycle_index"],
+                    "payload_hash": committed_payload_hash.hex(),
+                    "session_id": session_id.hex(),
+                },
+            )
+            req_ack = _make_security_message(
+                adapter,
+                "TRAX_REQ_ACK",
+                server_keys.private_key,
+                server_keys.public_key,
+                client_public_key,
+                session_id,
+                req_ack_payload,
+                dag_parent_refs=[session_node.node_hash],
+                cycle_index=req["cycle_index"],
+                payload_hash=committed_payload_hash.hex(),
+            )
         with metrics.measure("TRAX_REQ_ACK", CATEGORY_ORCHESTRATION):
             _send_udp(sock, req_ack, client_address, metrics)
         log.add("TRAX_REQ_ACK sent")
@@ -204,6 +237,16 @@ def _server(
             raise ProtocolError(junk["message_type"], "expected JUNK_STREAM_PAYLOAD")
         if hex_to_bytes(junk["session_id"], "session_id", metrics=metrics) != session_id:
             raise ProtocolError("JUNK_STREAM_PAYLOAD", "wrong session_id")
+        if mode == CHECKPOINT_MODE:
+            _validate_hash_bound_message(
+                adapter,
+                junk,
+                "JUNK_STREAM_PAYLOAD",
+                session_id,
+                committed_payload_hash,
+                3,
+                session_node.node_hash,
+            )
         payload = hex_to_bytes(junk["payload"], "payload", metrics=metrics)
         metrics.set_payload_bytes(len(payload))
         with metrics.measure("payload_hash_verify", CATEGORY_TRAX):
@@ -211,26 +254,39 @@ def _server(
                 raise ProtocolError("JUNK_STREAM_PAYLOAD", "payload hash mismatch")
         log.add("JUNK_STREAM_PAYLOAD hash verified")
 
-        res_payload = security_payload(
-            "TRAX_RES_ACK",
-            {
-                "cycle_index": req["cycle_index"],
-                "payload_hash": committed_payload_hash.hex(),
-                "session_id": session_id.hex(),
-            },
-        )
-        res_ack = _make_security_message(
-            adapter,
-            "TRAX_RES_ACK",
-            server_keys.private_key,
-            server_keys.public_key,
-            client_public_key,
-            session_id,
-            res_payload,
-            dag_parent_refs=[session_node.node_hash],
-            cycle_index=req["cycle_index"],
-            payload_hash=committed_payload_hash.hex(),
-        )
+        if mode == CHECKPOINT_MODE:
+            res_ack = _make_hash_bound_message(
+                adapter,
+                "TRAX_RES_ACK",
+                server_keys.public_key,
+                client_public_key,
+                session_id,
+                committed_payload_hash,
+                4,
+                session_node.node_hash,
+                cycle_index=req["cycle_index"],
+            )
+        else:
+            res_payload = security_payload(
+                "TRAX_RES_ACK",
+                {
+                    "cycle_index": req["cycle_index"],
+                    "payload_hash": committed_payload_hash.hex(),
+                    "session_id": session_id.hex(),
+                },
+            )
+            res_ack = _make_security_message(
+                adapter,
+                "TRAX_RES_ACK",
+                server_keys.private_key,
+                server_keys.public_key,
+                client_public_key,
+                session_id,
+                res_payload,
+                dag_parent_refs=[session_node.node_hash],
+                cycle_index=req["cycle_index"],
+                payload_hash=committed_payload_hash.hex(),
+            )
         with metrics.measure("TRAX_RES_ACK", CATEGORY_ORCHESTRATION):
             _send_udp(sock, res_ack, client_address, metrics)
         log.add("TRAX_RES_ACK sent")
@@ -249,6 +305,39 @@ def _server(
             )
             metrics.add_dag_node(stream_node.node_hash)
         log.add("STREAM_EXCHANGE_V0 appended")
+        if mode == CHECKPOINT_MODE:
+            checkpoint = _make_checkpoint(
+                adapter,
+                "udp",
+                server_keys.private_key,
+                server_keys.public_key,
+                client_public_key,
+                session_id,
+                session_node.node_hash,
+                stream_node.node_hash,
+                [
+                    _packet_hash(adapter, req),
+                    _packet_hash(adapter, req_ack),
+                    _packet_hash(adapter, junk),
+                    _packet_hash(adapter, res_ack),
+                ],
+                1,
+                4,
+            )
+            with metrics.measure("TRAX_CHECKPOINT", CATEGORY_ORCHESTRATION):
+                _send_udp(sock, checkpoint, client_address, metrics)
+            log.add("TRAX_CHECKPOINT sent")
+            with metrics.measure("dag_append_CHECKPOINT_V0", CATEGORY_ORCHESTRATION):
+                checkpoint_node = dag.append_node(
+                    "CHECKPOINT_V0",
+                    session_id,
+                    [stream_node.node_hash],
+                    {
+                        "TRAX_CHECKPOINT": _packet_hash(adapter, checkpoint),
+                    },
+                )
+                metrics.add_dag_node(checkpoint_node.node_hash)
+            log.add("CHECKPOINT_V0 appended")
     except socket.timeout as exc:
         log.reject("<timeout>", str(exc) or "udp receive timed out")
     except ProtocolError as exc:
@@ -266,8 +355,14 @@ def _server(
         sock.close()
 
 
-def run_udp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = None) -> UdpDemoResult:
-    metrics = RunMetrics("udp")
+def run_udp_demo(
+    adverse_case: str | None = None,
+    adapter: TraxAdapter | None = None,
+    mode: str = SIGNED_ENVELOPE_MODE,
+) -> UdpDemoResult:
+    if mode not in MODE_CHOICES:
+        raise ValueError(f"unsupported mode={mode!r}")
+    metrics = RunMetrics("udp", mode=mode)
     demo_started_ns = perf_counter_ns()
     adapter = adapter or TraxAdapter(metrics=metrics)
     adapter.metrics = metrics
@@ -283,7 +378,7 @@ def run_udp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = 
 
     server_thread = threading.Thread(
         target=_server,
-        args=(server_sock, adapter, dag, log, metrics, server_keys),
+        args=(server_sock, adapter, dag, log, metrics, server_keys, mode),
         daemon=True,
     )
     with metrics.measure("server.thread_start", CATEGORY_ORCHESTRATION):
@@ -292,7 +387,7 @@ def run_udp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = 
     error: str | None = None
     try:
         with metrics.measure("client.total", CATEGORY_ORCHESTRATION):
-            _client(server_address, adapter, log, metrics, adverse_case, server_keys.public_key)
+            _client(server_address, adapter, log, metrics, adverse_case, server_keys.public_key, mode)
     except ProtocolError as exc:
         log.reject(exc.message_type, exc.reason)
         error = exc.reason
@@ -306,7 +401,8 @@ def run_udp_demo(adverse_case: str | None = None, adapter: TraxAdapter | None = 
         error = error or "server thread did not finish"
         log.reject("<server>", error)
 
-    ok = error is None and len(dag) == 2 and not any(
+    expected_nodes = 3 if mode == CHECKPOINT_MODE else 2
+    ok = error is None and len(dag) == expected_nodes and not any(
         line.startswith("rejected ") for line in log.lines
     )
     demo_ended_ns = perf_counter_ns()
@@ -343,6 +439,7 @@ def _client(
     metrics: RunMetrics,
     adverse_case: str | None,
     observed_server_public_key: bytes,
+    mode: str,
 ) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.settimeout(UDP_TIMEOUT_SECONDS)
@@ -471,6 +568,16 @@ def _client(
             if adverse_case == "wrong_session":
                 return
 
+        client_session_node = DemoDag().append_node(
+            "SESSION_START_V0",
+            session_id,
+            [],
+            {
+                "TRAX_INIT": _packet_hash(adapter, init),
+                "TRAX_INIT_ACK": _packet_hash(adapter, init_ack),
+                "TRAX_COMMIT": _packet_hash(adapter, commit),
+            },
+        )
         payload_hash = adapter.hash32(UDP_PAYLOAD)
         if adverse_case == "payload_before_ack":
             junk = {
@@ -486,25 +593,39 @@ def _client(
             return
 
         with metrics.measure("stream_exchange_total", CATEGORY_ORCHESTRATION):
-            req_payload = security_payload(
-                "TRAX_REQ",
-                {
-                    "cycle_index": 0,
-                    "payload_hash": payload_hash.hex(),
-                    "session_id": session_id.hex(),
-                },
-            )
-            req = _make_security_message(
-                adapter,
-                "TRAX_REQ",
-                client_keys.private_key,
-                client_keys.public_key,
-                server_public_key,
-                session_id,
-                req_payload,
-                cycle_index=0,
-                payload_hash=payload_hash.hex(),
-            )
+            previous_tip = client_session_node.node_hash
+            if mode == CHECKPOINT_MODE:
+                req = _make_hash_bound_message(
+                    adapter,
+                    "TRAX_REQ",
+                    client_keys.public_key,
+                    server_public_key,
+                    session_id,
+                    payload_hash,
+                    1,
+                    previous_tip,
+                    cycle_index=0,
+                )
+            else:
+                req_payload = security_payload(
+                    "TRAX_REQ",
+                    {
+                        "cycle_index": 0,
+                        "payload_hash": payload_hash.hex(),
+                        "session_id": session_id.hex(),
+                    },
+                )
+                req = _make_security_message(
+                    adapter,
+                    "TRAX_REQ",
+                    client_keys.private_key,
+                    client_keys.public_key,
+                    server_public_key,
+                    session_id,
+                    req_payload,
+                    cycle_index=0,
+                    payload_hash=payload_hash.hex(),
+                )
             if adverse_case == "wrong_message_order":
                 req["message_type"] = "TRAX_RES_ACK"
             with metrics.measure("TRAX_REQ", CATEGORY_ORCHESTRATION):
@@ -513,31 +634,58 @@ def _client(
             if adverse_case == "wrong_message_order":
                 return
 
-            junk = {
-                "message_type": "JUNK_STREAM_PAYLOAD",
-                "session_id": session_id.hex(),
-                "payload": UDP_PAYLOAD.hex(),
-                "payload_hash": payload_hash.hex(),
-                "cycle_index": 0,
-            }
             with metrics.measure("TRAX_REQ_ACK", CATEGORY_ORCHESTRATION):
                 req_ack, _ = _recv_udp(sock, metrics)
-            req_ack_payload = security_payload(
-                "TRAX_REQ_ACK",
-                {
-                    "cycle_index": 0,
-                    "payload_hash": payload_hash.hex(),
+            if mode == CHECKPOINT_MODE:
+                _validate_hash_bound_message(
+                    adapter,
+                    req_ack,
+                    "TRAX_REQ_ACK",
+                    session_id,
+                    payload_hash,
+                    2,
+                    previous_tip,
+                    client_keys.public_key,
+                )
+                req["previous_tip"] = previous_tip.hex()
+                req["dag_parent_refs"] = [previous_tip.hex()]
+                req["event_hash"] = adapter.hash32(_hash_bound_material(req)).hex()
+                junk = _make_hash_bound_message(
+                    adapter,
+                    "JUNK_STREAM_PAYLOAD",
+                    client_keys.public_key,
+                    server_public_key,
+                    session_id,
+                    payload_hash,
+                    3,
+                    previous_tip,
+                    cycle_index=0,
+                    payload=UDP_PAYLOAD.hex(),
+                )
+            else:
+                junk = {
+                    "message_type": "JUNK_STREAM_PAYLOAD",
                     "session_id": session_id.hex(),
-                },
-            )
-            _validate_security_message(
-                adapter,
-                req_ack,
-                "TRAX_REQ_ACK",
-                client_keys.public_key,
-                req_ack_payload,
-                session_id,
-            )
+                    "payload": UDP_PAYLOAD.hex(),
+                    "payload_hash": payload_hash.hex(),
+                    "cycle_index": 0,
+                }
+                req_ack_payload = security_payload(
+                    "TRAX_REQ_ACK",
+                    {
+                        "cycle_index": 0,
+                        "payload_hash": payload_hash.hex(),
+                        "session_id": session_id.hex(),
+                    },
+                )
+                _validate_security_message(
+                    adapter,
+                    req_ack,
+                    "TRAX_REQ_ACK",
+                    client_keys.public_key,
+                    req_ack_payload,
+                    session_id,
+                )
             log.add("TRAX_REQ_ACK accepted")
 
             if adverse_case == "payload_hash_mismatch":
@@ -550,23 +698,50 @@ def _client(
 
             with metrics.measure("TRAX_RES_ACK", CATEGORY_ORCHESTRATION):
                 res_ack, _ = _recv_udp(sock, metrics)
-            res_payload = security_payload(
-                "TRAX_RES_ACK",
-                {
-                    "cycle_index": 0,
-                    "payload_hash": payload_hash.hex(),
-                    "session_id": session_id.hex(),
-                },
-            )
-            _validate_security_message(
-                adapter,
-                res_ack,
-                "TRAX_RES_ACK",
-                client_keys.public_key,
-                res_payload,
-                session_id,
-            )
+            if mode == CHECKPOINT_MODE:
+                _validate_hash_bound_message(
+                    adapter,
+                    res_ack,
+                    "TRAX_RES_ACK",
+                    session_id,
+                    payload_hash,
+                    4,
+                    previous_tip,
+                    client_keys.public_key,
+                )
+            else:
+                res_payload = security_payload(
+                    "TRAX_RES_ACK",
+                    {
+                        "cycle_index": 0,
+                        "payload_hash": payload_hash.hex(),
+                        "session_id": session_id.hex(),
+                    },
+                )
+                _validate_security_message(
+                    adapter,
+                    res_ack,
+                    "TRAX_RES_ACK",
+                    client_keys.public_key,
+                    res_payload,
+                    session_id,
+                )
             log.add("TRAX_RES_ACK accepted")
+
+            if mode == CHECKPOINT_MODE:
+                with metrics.measure("TRAX_CHECKPOINT", CATEGORY_ORCHESTRATION):
+                    checkpoint, _ = _recv_udp(sock, metrics)
+                checkpoint_payload = _checkpoint_payload_from_message(checkpoint)
+                _validate_security_message(
+                    adapter,
+                    checkpoint,
+                    "TRAX_CHECKPOINT",
+                    client_keys.public_key,
+                    checkpoint_payload,
+                    session_id,
+                    purpose="checkpoint",
+                )
+                log.add("TRAX_CHECKPOINT accepted")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -574,17 +749,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="emit result metrics as JSON")
     parser.add_argument("--include-events", action="store_true", help="include raw metric events in JSON")
     parser.add_argument("--runs", type=int, default=1, help="run the demo N times")
+    parser.add_argument("--mode", choices=MODE_CHOICES, default=SIGNED_ENVELOPE_MODE)
     args = parser.parse_args(argv)
 
+    def run_selected_mode() -> UdpDemoResult:
+        return run_udp_demo(mode=args.mode)
+
     if args.runs != 1:
-        results = run_repeated(run_udp_demo, args.runs)
+        results = run_repeated(run_selected_mode, args.runs)
         if args.json:
             print_repeated_json(results, include_events=args.include_events)
         else:
             print_repeated_text(results)
         return 0 if all(result.ok for result in results) else 1
 
-    result = run_udp_demo()
+    result = run_selected_mode()
     if args.json:
         payload = {
             "ok": result.ok,
