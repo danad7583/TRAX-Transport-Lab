@@ -19,6 +19,7 @@ from .tcp_demo import (
     ProtocolError,
     SIGNED_ENVELOPE_MODE,
     _checkpoint_payload_from_message,
+    _dag_genesis_invariant_error,
     _hash_bound_material,
     _make_checkpoint,
     _make_hash_bound_message,
@@ -490,6 +491,11 @@ def run_udp_demo(
         log.reject("<server>", error)
 
     expected_nodes = 3 if mode == CHECKPOINT_MODE else 2
+    metrics.finish(dag.final_tip())
+    invariant_error = _dag_genesis_invariant_error(metrics) if mode == DAG_GENESIS_MODE else None
+    if invariant_error is not None:
+        error = error or invariant_error
+        log.reject("dag-genesis", invariant_error)
     ok = error is None and len(dag) == expected_nodes and not any(
         line.startswith("rejected ") for line in log.lines
     )
@@ -501,7 +507,6 @@ def run_udp_demo(
         demo_ended_ns,
         ok=ok,
     )
-    metrics.finish(dag.final_tip())
     if ok:
         log.add("")
         log.add("Final tip:")

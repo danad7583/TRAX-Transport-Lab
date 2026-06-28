@@ -817,6 +817,11 @@ def run_tcp_demo(
         log.reject("<server>", error)
 
     expected_nodes = 3 if mode == CHECKPOINT_MODE else 2
+    metrics.finish(dag.final_tip())
+    invariant_error = _dag_genesis_invariant_error(metrics) if mode == DAG_GENESIS_MODE else None
+    if invariant_error is not None:
+        error = error or invariant_error
+        log.reject("dag-genesis", invariant_error)
     ok = error is None and len(dag) == expected_nodes and not any(
         line.startswith("rejected ") for line in log.lines
     )
@@ -828,7 +833,6 @@ def run_tcp_demo(
         demo_ended_ns,
         ok=ok,
     )
-    metrics.finish(dag.final_tip())
     if ok:
         log.add("")
         log.add("Final tip:")
@@ -844,6 +848,22 @@ def run_tcp_demo(
         metrics=metrics,
         error=error,
     )
+
+
+def _dag_genesis_invariant_error(metrics: RunMetrics) -> str | None:
+    counts = metrics.signing_counts_summary()
+    expected_counts = {
+        "hot_path_signed_packet_count": 0,
+        "signed_genesis_create_count": 1,
+        "signed_genesis_verify_count": 1,
+    }
+    for name, expected in expected_counts.items():
+        actual = counts[name]
+        if actual != expected:
+            return f"DAG-genesis invariant failed: {name} must be {expected}"
+    if counts["hash_bound_message_count"] <= 0:
+        return "DAG-genesis invariant failed: hash_bound_message_count must be > 0"
+    return None
 
 
 def _client(

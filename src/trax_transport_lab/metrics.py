@@ -579,14 +579,38 @@ class RunMetrics:
                 f"signed_genesis_verify_event_ms: {micro['signed_genesis_verify_event_ms']:.3f}",
                 f"hot_path_signed_packet_event_ms: {micro['hot_path_signed_packet_event_ms']:.3f}",
                 "",
-                "DAG-genesis interpretation:",
-                "DAG-genesis mode removes AAIP packet signing from the hot path.",
-                "Only the genesis is signed.",
-                "Normal messages are hash-bound and DAG-verified.",
-                "",
-                "Slowest events:",
             ]
         )
+        if self.mode == "dag-genesis":
+            lines.extend(
+                [
+                    "DAG-genesis interpretation:",
+                    "DAG-genesis mode removes AAIP packet signing from the hot path.",
+                    "Only the genesis is signed.",
+                    "Normal messages are hash-bound and DAG-verified.",
+                    "",
+                ]
+            )
+        elif self.mode == "checkpoint":
+            lines.extend(
+                [
+                    "Checkpoint interpretation:",
+                    "Checkpoint mode is an intermediate experiment.",
+                    "It reduces per-message signing by using hash-bound messages and signed checkpoints.",
+                    "",
+                ]
+            )
+        elif self.mode == "signed-envelope":
+            lines.extend(
+                [
+                    "Signed-envelope interpretation:",
+                    "Signed-envelope mode is the conservative baseline.",
+                    "Every protocol message envelope is signed/verified.",
+                    "This mode is intentionally expensive and exists for comparison.",
+                    "",
+                ]
+            )
+        lines.append("Slowest events:")
         for index, event in enumerate(self.slowest_events(10), start=1):
             lines.append(
                 f"{index}. {event['name']} [{event['category']}] {event['duration_ms']:.3f} ms"

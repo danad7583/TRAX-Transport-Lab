@@ -74,6 +74,8 @@ Or:
 python .\scripts\run_all.py
 ```
 
+`run_all.py` validates both the signed-envelope baseline and the DAG-genesis intended hot-path model. It runs the default TCP/UDP demos for backward compatibility, then runs the DAG-genesis TCP/UDP demos, signed-envelope vs DAG-genesis mode comparisons, and a DAG-genesis TCP-vs-UDP comparison.
+
 Expected TCP demo output includes:
 
 ```text
@@ -277,13 +279,34 @@ Packets carry evidence. The DAG carries trust.
 Run DAG-genesis mode directly:
 
 ```powershell
+python -m trax_transport_lab.tcp_demo --mode dag-genesis
 python -m trax_transport_lab.udp_demo --mode dag-genesis
 python -m trax_transport_lab.udp_demo --mode dag-genesis --json
 python .\scripts\compare_modes.py --mode-a signed-envelope --mode-b dag-genesis --transport udp --runs 10
+python .\scripts\compare_modes.py --mode-a signed-envelope --mode-b dag-genesis --transport tcp --runs 10
 python .\scripts\compare_transports.py --mode dag-genesis --runs 10
 ```
 
-In DAG-genesis mode, `hot_path_signed_packet_count` should be 0. The only signature operation in the normal run is genesis signing/verification. Hash-bound messages and DAG append operations form the hot path.
+Validate DAG-genesis mode:
+
+```powershell
+python -m trax_transport_lab.tcp_demo --mode dag-genesis
+python -m trax_transport_lab.udp_demo --mode dag-genesis
+python .\scripts\compare_modes.py --mode-a signed-envelope --mode-b dag-genesis --transport udp --runs 10
+python .\scripts\compare_modes.py --mode-a signed-envelope --mode-b dag-genesis --transport tcp --runs 10
+python .\scripts\compare_transports.py --mode dag-genesis --runs 10
+```
+
+Expected DAG-genesis metrics:
+
+```text
+hot_path_signed_packet_count: 0
+signed_genesis_create_count: 1
+signed_genesis_verify_count: 1
+hash_bound_message_count: > 0
+```
+
+In DAG-genesis mode, `hot_path_signed_packet_count` must be 0. The only signature operation in the normal run is genesis signing/verification. Hash-bound messages and DAG append operations form the hot path.
 
 These are local loopback diagnostic metrics, not benchmark-grade claims.
 
