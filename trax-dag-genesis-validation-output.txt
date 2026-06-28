@@ -1,0 +1,721 @@
+== TRAX Transport Lab Full Validation ==
+Sun Jun 28 03:44:23 PM CDT 2026
+
+== run_all.py ==
+
+== Verify TRAX import ==
+> /home/deejaycee/repos/TRAX-Transport-Lab/.venv/bin/python -c import trax; print(trax)
+<module 'trax' from '/home/deejaycee/repos/TRAX-Transport-Lab/.venv/lib64/python3.11/site-packages/trax/__init__.py'>
+
+== Run tests ==
+> /home/deejaycee/repos/TRAX-Transport-Lab/.venv/bin/python -m pytest
+........................................................................ [ 84%]
+.............                                                            [100%]
+85 passed in 12.46s
+
+== Run TCP demo: signed-envelope baseline ==
+> /home/deejaycee/repos/TRAX-Transport-Lab/.venv/bin/python -m trax_transport_lab.tcp_demo
+TCP DEMO OK
+
+TRAX_INIT sent
+TRAX_INIT accepted
+TRAX_INIT_ACK sent
+TRAX_INIT_ACK accepted
+TRAX_COMMIT sent
+TRAX_REQ sent
+TRAX_COMMIT accepted
+SESSION_START_V0 appended
+TRAX_REQ accepted
+TRAX_REQ_ACK sent
+TRAX_REQ_ACK accepted
+JUNK_STREAM_PAYLOAD sent
+JUNK_STREAM_PAYLOAD hash verified
+TRAX_RES_ACK sent
+STREAM_EXCHANGE_V0 appended
+TRAX_RES_ACK accepted
+
+Final tip:
+1d7aecce6cf308aaf992b3ac36660f151699236a6447ce3739ab029044b8a0f0
+
+Mode:
+signed-envelope
+
+Wall-clock:
+total_wall_ms: 128.960
+session_handshake_wall_ms: 30.606
+stream_exchange_wall_ms: 74.290
+
+Event sums, may overlap:
+trax_primitives_event_ms: 173.704
+python_packaging_event_ms: 1.597
+transport_io_event_ms: 254.842
+dag_event_ms: 0.100
+orchestration_event_ms: 628.063
+unclassified_event_ms: 0.000
+
+Primitive highlights:
+payload_hash_verify_us: 43.732
+dag_append_event_us: 63.900
+trax_hash32_event_us: 229.823
+trax_create_envelope_event_us: 36402.066
+trax_create_envelope_event_ms: 36.402
+trax_verify_envelope_event_us: 42010.997
+trax_verify_envelope_event_ms: 42.011
+signed_envelope_create_event_ms: 36.503
+signed_envelope_verify_event_ms: 42.053
+signed_checkpoint_create_event_ms: 0.000
+signed_checkpoint_verify_event_ms: 0.000
+signed_genesis_create_event_ms: 0.000
+signed_genesis_verify_event_ms: 0.000
+hot_path_signed_packet_event_ms: 78.556
+hash_bound_messages_event_us: 0.000
+
+Counts:
+bytes_sent: 17356
+bytes_received: 17356
+frames_sent: 7
+frames_received: 7
+payload_bytes: 3456
+dag_nodes_appended: 2
+
+Signing counts:
+signed_envelope_create_count: 6
+signed_envelope_verify_count: 6
+signed_checkpoint_create_count: 0
+signed_checkpoint_verify_count: 0
+signed_genesis_create_count: 0
+signed_genesis_verify_count: 0
+hot_path_signed_packet_count: 12
+hash_bound_message_count: 0
+
+Delta-ready metrics:
+payload_hash_verify_us: 43.732
+dag_append_event_us: 63.900
+signed_envelope_create_event_ms: 36.503
+signed_envelope_verify_event_ms: 42.053
+signed_checkpoint_create_event_ms: 0.000
+signed_checkpoint_verify_event_ms: 0.000
+signed_genesis_create_event_ms: 0.000
+signed_genesis_verify_event_ms: 0.000
+hot_path_signed_packet_event_ms: 78.556
+
+Signed-envelope interpretation:
+Signed-envelope mode is the conservative baseline.
+Every protocol message envelope is signed/verified.
+This mode is intentionally expensive and exists for comparison.
+
+Slowest events:
+1. demo.total [orchestration] 128.960 ms
+2. client.total [orchestration] 119.204 ms
+3. server.total [orchestration] 112.320 ms
+4. stream_exchange_total [orchestration] 74.290 ms
+5. TRAX_REQ_ACK [orchestration] 47.459 ms
+6. tcp.recv_frame [transport_io] 47.345 ms
+7. tcp.recv_exact [transport_io] 47.284 ms
+8. session_handshake_total [orchestration] 30.606 ms
+9. TRAX_REQ [orchestration] 29.137 ms
+10. tcp.recv_frame [transport_io] 29.062 ms
+
+Interpretation:
+local loopback diagnostic metrics; not benchmark-grade results
+wall-clock values measure elapsed demo time
+event-sum values may overlap across client/server threads and nested operations
+
+== Run UDP demo: signed-envelope baseline ==
+> /home/deejaycee/repos/TRAX-Transport-Lab/.venv/bin/python -m trax_transport_lab.udp_demo
+UDP DEMO OK
+
+TRAX_INIT sent
+TRAX_INIT accepted
+TRAX_INIT_ACK sent
+TRAX_INIT_ACK accepted
+TRAX_COMMIT sent
+TRAX_COMMIT accepted
+SESSION_START_V0 appended
+TRAX_REQ sent
+TRAX_REQ accepted
+TRAX_REQ_ACK sent
+TRAX_REQ_ACK accepted
+JUNK_STREAM_PAYLOAD sent
+JUNK_STREAM_PAYLOAD hash verified
+TRAX_RES_ACK sent
+STREAM_EXCHANGE_V0 appended
+TRAX_RES_ACK accepted
+
+Final tip:
+3cb3ab476c4205e376d50a3925da7c49f71c4f68853d79f290c3fb5ee5306999
+
+Mode:
+signed-envelope
+
+Wall-clock:
+total_wall_ms: 89.328
+session_handshake_wall_ms: 24.971
+stream_exchange_wall_ms: 44.839
+
+Event sums, may overlap:
+trax_primitives_event_ms: 171.719
+python_packaging_event_ms: 1.542
+transport_io_event_ms: 69.517
+dag_event_ms: 0.086
+orchestration_event_ms: 407.837
+unclassified_event_ms: 0.000
+
+Primitive highlights:
+payload_hash_verify_us: 14.557
+dag_append_event_us: 54.663
+trax_hash32_event_us: 180.430
+trax_create_envelope_event_us: 41370.321
+trax_create_envelope_event_ms: 41.370
+trax_verify_envelope_event_us: 37957.378
+trax_verify_envelope_event_ms: 37.957
+signed_envelope_create_event_ms: 41.441
+signed_envelope_verify_event_ms: 38.002
+signed_checkpoint_create_event_ms: 0.000
+signed_checkpoint_verify_event_ms: 0.000
+signed_genesis_create_event_ms: 0.000
+signed_genesis_verify_event_ms: 0.000
+hot_path_signed_packet_event_ms: 79.442
+hash_bound_messages_event_us: 0.000
+
+Counts:
+bytes_sent: 11950
+bytes_received: 11950
+datagrams_sent: 7
+datagrams_received: 7
+payload_bytes: 768
+dag_nodes_appended: 2
+
+Signing counts:
+signed_envelope_create_count: 6
+signed_envelope_verify_count: 6
+signed_checkpoint_create_count: 0
+signed_checkpoint_verify_count: 0
+signed_genesis_create_count: 0
+signed_genesis_verify_count: 0
+hot_path_signed_packet_count: 12
+hash_bound_message_count: 0
+
+Delta-ready metrics:
+payload_hash_verify_us: 14.557
+dag_append_event_us: 54.663
+signed_envelope_create_event_ms: 41.441
+signed_envelope_verify_event_ms: 38.002
+signed_checkpoint_create_event_ms: 0.000
+signed_checkpoint_verify_event_ms: 0.000
+signed_genesis_create_event_ms: 0.000
+signed_genesis_verify_event_ms: 0.000
+hot_path_signed_packet_event_ms: 79.442
+
+Signed-envelope interpretation:
+Signed-envelope mode is the conservative baseline.
+Every protocol message envelope is signed/verified.
+This mode is intentionally expensive and exists for comparison.
+
+Slowest events:
+1. demo.total [orchestration] 89.330 ms
+2. client.total [orchestration] 82.421 ms
+3. server.total [orchestration] 75.929 ms
+4. stream_exchange_total [orchestration] 44.839 ms
+5. session_handshake_total [orchestration] 24.971 ms
+6. TRAX_COMMIT [orchestration] 18.578 ms
+7. udp.recv_datagram [transport_io] 18.485 ms
+8. server.recv_init [orchestration] 13.040 ms
+9. TRAX_INIT [orchestration] 12.849 ms
+10. udp.recv_datagram [transport_io] 12.683 ms
+
+Interpretation:
+local loopback diagnostic metrics; not benchmark-grade results
+wall-clock values measure elapsed demo time
+event-sum values may overlap across client/server threads and nested operations
+
+== Run TCP demo: dag-genesis ==
+> /home/deejaycee/repos/TRAX-Transport-Lab/.venv/bin/python -m trax_transport_lab.tcp_demo --mode dag-genesis
+TCP DEMO OK
+
+TRAX_GENESIS sent
+TRAX_INIT sent
+TRAX_GENESIS accepted
+TRAX_INIT accepted
+TRAX_INIT_ACK sent
+TRAX_INIT_ACK accepted
+TRAX_COMMIT sent
+TRAX_REQ sent
+TRAX_COMMIT accepted
+SESSION_START_V0 appended
+TRAX_REQ accepted
+TRAX_REQ_ACK sent
+TRAX_REQ_ACK accepted
+JUNK_STREAM_PAYLOAD sent
+JUNK_STREAM_PAYLOAD hash verified
+TRAX_RES_ACK sent
+STREAM_EXCHANGE_V0 appended
+TRAX_RES_ACK accepted
+
+Final tip:
+8830f94616562986614777124b307799ae719f6f084e9753a1d133761d0e89b5
+
+Mode:
+dag-genesis
+
+Wall-clock:
+total_wall_ms: 71.279
+session_handshake_wall_ms: 6.932
+stream_exchange_wall_ms: 44.063
+
+Event sums, may overlap:
+trax_primitives_event_ms: 35.892
+python_packaging_event_ms: 2.613
+transport_io_event_ms: 208.862
+dag_event_ms: 0.126
+orchestration_event_ms: 383.166
+unclassified_event_ms: 0.000
+
+Primitive highlights:
+payload_hash_verify_us: 17.443
+dag_append_event_us: 80.132
+trax_hash32_event_us: 347.041
+trax_create_envelope_event_us: 5674.135
+trax_create_envelope_event_ms: 5.674
+trax_verify_envelope_event_us: 5971.366
+trax_verify_envelope_event_ms: 5.971
+signed_envelope_create_event_ms: 0.000
+signed_envelope_verify_event_ms: 0.000
+signed_checkpoint_create_event_ms: 0.000
+signed_checkpoint_verify_event_ms: 0.000
+signed_genesis_create_event_ms: 5.681
+signed_genesis_verify_event_ms: 5.975
+hot_path_signed_packet_event_ms: 0.000
+hash_bound_messages_event_us: 708.306
+
+Counts:
+bytes_sent: 14678
+bytes_received: 14678
+frames_sent: 8
+frames_received: 8
+payload_bytes: 3456
+dag_nodes_appended: 2
+
+Signing counts:
+signed_envelope_create_count: 0
+signed_envelope_verify_count: 0
+signed_checkpoint_create_count: 0
+signed_checkpoint_verify_count: 0
+signed_genesis_create_count: 1
+signed_genesis_verify_count: 1
+hot_path_signed_packet_count: 0
+hash_bound_message_count: 7
+
+Delta-ready metrics:
+payload_hash_verify_us: 17.443
+dag_append_event_us: 80.132
+signed_envelope_create_event_ms: 0.000
+signed_envelope_verify_event_ms: 0.000
+signed_checkpoint_create_event_ms: 0.000
+signed_checkpoint_verify_event_ms: 0.000
+signed_genesis_create_event_ms: 5.681
+signed_genesis_verify_event_ms: 5.975
+hot_path_signed_packet_event_ms: 0.000
+
+DAG-genesis interpretation:
+DAG-genesis mode removes AAIP packet signing from the hot path.
+Only the genesis is signed.
+Normal messages are hash-bound and DAG-verified.
+
+Slowest events:
+1. demo.total [orchestration] 71.298 ms
+2. client.total [orchestration] 64.431 ms
+3. server.total [orchestration] 64.079 ms
+4. stream_exchange_total [orchestration] 44.063 ms
+5. TRAX_REQ_ACK [orchestration] 42.564 ms
+6. tcp.recv_frame [transport_io] 42.442 ms
+7. tcp.recv_exact [transport_io] 42.370 ms
+8. TRAX_REQ [orchestration] 41.354 ms
+9. tcp.recv_frame [transport_io] 41.182 ms
+10. tcp.recv_exact [transport_io] 40.987 ms
+
+Interpretation:
+local loopback diagnostic metrics; not benchmark-grade results
+wall-clock values measure elapsed demo time
+event-sum values may overlap across client/server threads and nested operations
+
+== Run UDP demo: dag-genesis ==
+> /home/deejaycee/repos/TRAX-Transport-Lab/.venv/bin/python -m trax_transport_lab.udp_demo --mode dag-genesis
+UDP DEMO OK
+
+TRAX_GENESIS sent
+TRAX_INIT sent
+TRAX_GENESIS accepted
+TRAX_INIT accepted
+TRAX_INIT_ACK sent
+TRAX_INIT_ACK accepted
+TRAX_COMMIT sent
+TRAX_COMMIT accepted
+SESSION_START_V0 appended
+TRAX_REQ accepted
+TRAX_REQ_ACK sent
+TRAX_REQ sent
+TRAX_REQ_ACK accepted
+JUNK_STREAM_PAYLOAD sent
+JUNK_STREAM_PAYLOAD hash verified
+TRAX_RES_ACK sent
+STREAM_EXCHANGE_V0 appended
+TRAX_RES_ACK accepted
+
+Final tip:
+a7129fdf1c1600ca3f9c8687e72f9eab83ba9fba0249bb65eb1684f2e74ba8f1
+
+Mode:
+dag-genesis
+
+Wall-clock:
+total_wall_ms: 32.879
+session_handshake_wall_ms: 7.473
+stream_exchange_wall_ms: 0.872
+
+Event sums, may overlap:
+trax_primitives_event_ms: 41.037
+python_packaging_event_ms: 1.520
+transport_io_event_ms: 22.197
+dag_event_ms: 0.071
+orchestration_event_ms: 139.120
+unclassified_event_ms: 0.000
+
+Primitive highlights:
+payload_hash_verify_us: 3.347
+dag_append_event_us: 46.016
+trax_hash32_event_us: 237.428
+trax_create_envelope_event_us: 5697.921
+trax_create_envelope_event_ms: 5.698
+trax_verify_envelope_event_us: 6229.503
+trax_verify_envelope_event_ms: 6.230
+signed_envelope_create_event_ms: 0.000
+signed_envelope_verify_event_ms: 0.000
+signed_checkpoint_create_event_ms: 0.000
+signed_checkpoint_verify_event_ms: 0.000
+signed_genesis_create_event_ms: 5.705
+signed_genesis_verify_event_ms: 6.238
+hot_path_signed_packet_event_ms: 0.000
+hash_bound_messages_event_us: 246.116
+
+Counts:
+bytes_sent: 9276
+bytes_received: 9276
+datagrams_sent: 8
+datagrams_received: 8
+payload_bytes: 768
+dag_nodes_appended: 2
+
+Signing counts:
+signed_envelope_create_count: 0
+signed_envelope_verify_count: 0
+signed_checkpoint_create_count: 0
+signed_checkpoint_verify_count: 0
+signed_genesis_create_count: 1
+signed_genesis_verify_count: 1
+hot_path_signed_packet_count: 0
+hash_bound_message_count: 7
+
+Delta-ready metrics:
+payload_hash_verify_us: 3.347
+dag_append_event_us: 46.016
+signed_envelope_create_event_ms: 0.000
+signed_envelope_verify_event_ms: 0.000
+signed_checkpoint_create_event_ms: 0.000
+signed_checkpoint_verify_event_ms: 0.000
+signed_genesis_create_event_ms: 5.705
+signed_genesis_verify_event_ms: 6.238
+hot_path_signed_packet_event_ms: 0.000
+
+DAG-genesis interpretation:
+DAG-genesis mode removes AAIP packet signing from the hot path.
+Only the genesis is signed.
+Normal messages are hash-bound and DAG-verified.
+
+Slowest events:
+1. demo.total [orchestration] 32.882 ms
+2. server.total [orchestration] 21.991 ms
+3. client.total [orchestration] 21.916 ms
+4. server.recv_init [orchestration] 20.353 ms
+5. TRAX_GENESIS [orchestration] 13.746 ms
+6. udp.recv_datagram [transport_io] 13.589 ms
+7. demo.thread_startup [orchestration] 9.271 ms
+8. trax.generate_keypair [trax_primitives] 9.215 ms
+9. session_handshake_total [orchestration] 7.473 ms
+10. trax.generate_keypair [trax_primitives] 7.419 ms
+
+Interpretation:
+local loopback diagnostic metrics; not benchmark-grade results
+wall-clock values measure elapsed demo time
+event-sum values may overlap across client/server threads and nested operations
+
+== Compare modes: signed-envelope vs dag-genesis UDP ==
+> /home/deejaycee/repos/TRAX-Transport-Lab/.venv/bin/python scripts/compare_modes.py --mode-a signed-envelope --mode-b dag-genesis --transport udp --runs 3
+TRAX mode comparison
+local loopback diagnostic metrics; not benchmark-grade results
+
+transport: udp
+runs: 3
+ok: True
+
+signed-envelope mode:
+  avg total_wall_ms: 86.986
+  avg hot_path_signed_packet_count: 12.000
+  avg signed_envelope_create_count: 6.000
+  avg signed_envelope_verify_count: 6.000
+  avg signed_genesis_create_count: 0.000
+  avg signed_genesis_verify_count: 0.000
+  avg signed_checkpoint_create_count: 0.000
+  avg signed_checkpoint_verify_count: 0.000
+  avg hash_bound_message_count: 0.000
+  avg signed_envelope_create_event_ms: 38.902
+  avg signed_envelope_verify_event_ms: 37.828
+  avg signed_genesis_create_event_ms: 0.000
+  avg signed_genesis_verify_event_ms: 0.000
+  avg hot_path_signed_packet_event_ms: 76.730
+  avg signed_checkpoint_create_event_ms: 0.000
+  avg signed_checkpoint_verify_event_ms: 0.000
+  avg payload_hash_verify_us: 15.279
+  avg dag_append_event_us: 46.778
+
+dag-genesis mode:
+  avg total_wall_ms: 27.475
+  avg hot_path_signed_packet_count: 0.000
+  avg signed_envelope_create_count: 0.000
+  avg signed_envelope_verify_count: 0.000
+  avg signed_genesis_create_count: 1.000
+  avg signed_genesis_verify_count: 1.000
+  avg signed_checkpoint_create_count: 0.000
+  avg signed_checkpoint_verify_count: 0.000
+  avg hash_bound_message_count: 7.000
+  avg signed_envelope_create_event_ms: 0.000
+  avg signed_envelope_verify_event_ms: 0.000
+  avg signed_genesis_create_event_ms: 5.661
+  avg signed_genesis_verify_event_ms: 6.431
+  avg hot_path_signed_packet_event_ms: 0.000
+  avg signed_checkpoint_create_event_ms: 0.000
+  avg signed_checkpoint_verify_event_ms: 0.000
+  avg payload_hash_verify_us: 8.225
+  avg dag_append_event_us: 73.254
+
+Delta:
+  hot_path_signed_packet_count_delta: -12.000
+  signed_envelope_event_ms_delta: -76.730
+  total_wall_ms_delta: -59.511
+  total_wall_ms_delta_percent: -68.414
+  signed_create_event_ms_delta: -38.902
+  signed_verify_event_ms_delta: -37.828
+  signing_operation_count_delta: -10.000
+
+Interpretation:
+DAG-genesis mode removes per-message AAIP envelope signing from the hot path. The remaining security check is DAG continuity from signed genesis in this local diagnostic run.
+These are local loopback diagnostic metrics, not benchmark-grade claims.
+
+== Compare modes: signed-envelope vs dag-genesis TCP ==
+> /home/deejaycee/repos/TRAX-Transport-Lab/.venv/bin/python scripts/compare_modes.py --mode-a signed-envelope --mode-b dag-genesis --transport tcp --runs 3
+TRAX mode comparison
+local loopback diagnostic metrics; not benchmark-grade results
+
+transport: tcp
+runs: 3
+ok: True
+
+signed-envelope mode:
+  avg total_wall_ms: 116.845
+  avg hot_path_signed_packet_count: 12.000
+  avg signed_envelope_create_count: 6.000
+  avg signed_envelope_verify_count: 6.000
+  avg signed_genesis_create_count: 0.000
+  avg signed_genesis_verify_count: 0.000
+  avg signed_checkpoint_create_count: 0.000
+  avg signed_checkpoint_verify_count: 0.000
+  avg hash_bound_message_count: 0.000
+  avg signed_envelope_create_event_ms: 36.731
+  avg signed_envelope_verify_event_ms: 37.715
+  avg signed_genesis_create_event_ms: 0.000
+  avg signed_genesis_verify_event_ms: 0.000
+  avg hot_path_signed_packet_event_ms: 74.446
+  avg signed_checkpoint_create_event_ms: 0.000
+  avg signed_checkpoint_verify_event_ms: 0.000
+  avg payload_hash_verify_us: 28.607
+  avg dag_append_event_us: 60.320
+
+dag-genesis mode:
+  avg total_wall_ms: 72.523
+  avg hot_path_signed_packet_count: 0.000
+  avg signed_envelope_create_count: 0.000
+  avg signed_envelope_verify_count: 0.000
+  avg signed_genesis_create_count: 1.000
+  avg signed_genesis_verify_count: 1.000
+  avg signed_checkpoint_create_count: 0.000
+  avg signed_checkpoint_verify_count: 0.000
+  avg hash_bound_message_count: 7.000
+  avg signed_envelope_create_event_ms: 0.000
+  avg signed_envelope_verify_event_ms: 0.000
+  avg signed_genesis_create_event_ms: 6.841
+  avg signed_genesis_verify_event_ms: 7.401
+  avg hot_path_signed_packet_event_ms: 0.000
+  avg signed_checkpoint_create_event_ms: 0.000
+  avg signed_checkpoint_verify_event_ms: 0.000
+  avg payload_hash_verify_us: 10.880
+  avg dag_append_event_us: 79.377
+
+Delta:
+  hot_path_signed_packet_count_delta: -12.000
+  signed_envelope_event_ms_delta: -74.446
+  total_wall_ms_delta: -44.322
+  total_wall_ms_delta_percent: -37.932
+  signed_create_event_ms_delta: -36.731
+  signed_verify_event_ms_delta: -37.715
+  signing_operation_count_delta: -10.000
+
+Interpretation:
+DAG-genesis mode removes per-message AAIP envelope signing from the hot path. The remaining security check is DAG continuity from signed genesis in this local diagnostic run.
+These are local loopback diagnostic metrics, not benchmark-grade claims.
+
+== Compare transports: dag-genesis ==
+> /home/deejaycee/repos/TRAX-Transport-Lab/.venv/bin/python scripts/compare_transports.py --mode dag-genesis --runs 3
+TRAX Transport Lab comparison
+local loopback diagnostic metrics; not benchmark-grade results
+event-sum buckets may overlap across client/server threads and nested operations
+
+runs: 3
+mode: dag-genesis
+ok: True
+
+Wall-clock averages:
+TCP avg total_wall_ms: 69.992
+UDP avg total_wall_ms: 27.123
+TCP avg session_handshake_wall_ms: 7.464
+UDP avg session_handshake_wall_ms: 7.217
+TCP avg stream_exchange_wall_ms: 43.091
+UDP avg stream_exchange_wall_ms: 1.162
+
+Event-sum averages, may overlap:
+TCP avg trax_primitives_event_ms: 37.214
+UDP avg trax_primitives_event_ms: 36.295
+TCP avg python_packaging_event_ms: 2.396
+UDP avg python_packaging_event_ms: 1.715
+TCP avg transport_io_event_ms: 182.776
+UDP avg transport_io_event_ms: 20.620
+TCP avg dag_event_ms: 0.155
+UDP avg dag_event_ms: 0.082
+
+Primitive highlights:
+TCP avg payload_hash_verify_us: 13.850
+UDP avg payload_hash_verify_us: 3.590
+TCP avg dag_append_event_us: 99.431
+UDP avg dag_append_event_us: 51.333
+TCP avg trax_create_envelope_event_ms: 5.806
+UDP avg trax_create_envelope_event_ms: 5.669
+TCP avg trax_verify_envelope_event_ms: 6.404
+UDP avg trax_verify_envelope_event_ms: 6.314
+
+Interpretation:
+UDP wall-clock is lighter in this local run.
+Hash binding is microsecond-scale.
+Envelope create/verify is millisecond-scale.
+These are local loopback diagnostic metrics, not benchmark-grade claims.
+
+== UDP signed-envelope vs dag-genesis ==
+TRAX mode comparison
+local loopback diagnostic metrics; not benchmark-grade results
+
+transport: udp
+runs: 10
+ok: True
+
+signed-envelope mode:
+  avg total_wall_ms: 87.913
+  avg hot_path_signed_packet_count: 12.000
+  avg signed_envelope_create_count: 6.000
+  avg signed_envelope_verify_count: 6.000
+  avg signed_genesis_create_count: 0.000
+  avg signed_genesis_verify_count: 0.000
+  avg signed_checkpoint_create_count: 0.000
+  avg signed_checkpoint_verify_count: 0.000
+  avg hash_bound_message_count: 0.000
+  avg signed_envelope_create_event_ms: 39.750
+  avg signed_envelope_verify_event_ms: 38.416
+  avg signed_genesis_create_event_ms: 0.000
+  avg signed_genesis_verify_event_ms: 0.000
+  avg hot_path_signed_packet_event_ms: 78.166
+  avg signed_checkpoint_create_event_ms: 0.000
+  avg signed_checkpoint_verify_event_ms: 0.000
+  avg payload_hash_verify_us: 16.472
+  avg dag_append_event_us: 43.315
+
+dag-genesis mode:
+  avg total_wall_ms: 26.772
+  avg hot_path_signed_packet_count: 0.000
+  avg signed_envelope_create_count: 0.000
+  avg signed_envelope_verify_count: 0.000
+  avg signed_genesis_create_count: 1.000
+  avg signed_genesis_verify_count: 1.000
+  avg signed_checkpoint_create_count: 0.000
+  avg signed_checkpoint_verify_count: 0.000
+  avg hash_bound_message_count: 7.000
+  avg signed_envelope_create_event_ms: 0.000
+  avg signed_envelope_verify_event_ms: 0.000
+  avg signed_genesis_create_event_ms: 5.662
+  avg signed_genesis_verify_event_ms: 6.309
+  avg hot_path_signed_packet_event_ms: 0.000
+  avg signed_checkpoint_create_event_ms: 0.000
+  avg signed_checkpoint_verify_event_ms: 0.000
+  avg payload_hash_verify_us: 4.149
+  avg dag_append_event_us: 63.927
+
+Delta:
+  hot_path_signed_packet_count_delta: -12.000
+  signed_envelope_event_ms_delta: -78.166
+  total_wall_ms_delta: -61.142
+  total_wall_ms_delta_percent: -69.548
+  signed_create_event_ms_delta: -39.750
+  signed_verify_event_ms_delta: -38.416
+  signing_operation_count_delta: -10.000
+
+Interpretation:
+DAG-genesis mode removes per-message AAIP envelope signing from the hot path. The remaining security check is DAG continuity from signed genesis in this local diagnostic run.
+These are local loopback diagnostic metrics, not benchmark-grade claims.
+
+== TCP signed-envelope vs dag-genesis ==
+Traceback (most recent call last):
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/scripts/compare_modes.py", line 222, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/scripts/compare_modes.py", line 213, in main
+    payload = comparison_payload(transports, args.runs, args.mode_a, args.mode_b)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/scripts/compare_modes.py", line 129, in comparison_payload
+    second = _mode_payload(transport, mode_b, runs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/scripts/compare_modes.py", line 59, in _mode_payload
+    results = _run_transport(transport, mode, runs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/scripts/compare_modes.py", line 30, in _run_transport
+    return [fn(mode=mode) for _ in range(runs)]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/scripts/compare_modes.py", line 30, in <listcomp>
+    return [fn(mode=mode) for _ in range(runs)]
+            ^^^^^^^^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/src/trax_transport_lab/tcp_demo.py", line 805, in run_tcp_demo
+    _client(host, port, adapter, log, metrics, adverse_case, server_keys.public_key, mode)
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/src/trax_transport_lab/tcp_demo.py", line 1147, in _client
+    req_ack = _recv_tcp(sock, metrics)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/src/trax_transport_lab/tcp_demo.py", line 69, in _recv_tcp
+    data = recv_frame(sock, MAX_PACKET_LEN, metrics=metrics)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/src/trax_transport_lab/framing.py", line 87, in recv_frame
+    return _recv()
+           ^^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/src/trax_transport_lab/framing.py", line 72, in _recv
+    header = recv_exact(sock, 4, metrics=metrics)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/src/trax_transport_lab/framing.py", line 63, in recv_exact
+    return _recv()
+           ^^^^^^^
+  File "/home/deejaycee/repos/TRAX-Transport-Lab/src/trax_transport_lab/framing.py", line 51, in _recv
+    chunk = sock.recv(remaining)
+            ^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
