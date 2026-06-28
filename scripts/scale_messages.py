@@ -24,10 +24,38 @@ from trax_transport_lab.udp_demo import run_udp_demo
 
 TRANSPORTS = ("tcp", "udp")
 DEFAULT_COUNTS = [10, 100, 1000]
+REQUIRED_PERFORMANCE_FIELDS = [
+    "total_wall_ms",
+    "post_genesis_wall_ms",
+    "avg_message_wall_us",
+    "messages_per_second",
+    "payload_hash_verify_us",
+    "dag_append_event_us",
+    "hash_bound_message_count",
+    "hot_path_signed_packet_count",
+    "signed_genesis_create_count",
+    "signed_genesis_verify_count",
+    "dag_segment_count",
+    "dag_segment_event_ms",
+    "agent_key_rotation_event_count",
+    "agent_key_rotation_signed_packet_count",
+    "agent_key_rotation_event_ms",
+    "dag_key_rotation_event_count",
+    "dag_key_rotation_event_ms",
+    "dag_nodes_retained",
+    "dag_nodes_pruned",
+]
 
 
 def _avg(summary: dict, name: str) -> float:
     return summary[name]["avg"]
+
+
+def _avg_text(summary: dict, name: str) -> str:
+    value = summary.get(name, {}).get("avg")
+    if value is None:
+        return "unavailable"
+    return f"{value:.3f}"
 
 
 def _run_many(transport: str, mode: str, runs: int, scale_config):
@@ -114,28 +142,8 @@ def _print_count(payload: dict) -> None:
     print(f"max_dag_nodes: {payload['max_dag_nodes']}")
     print(f"ok: {payload['ok']}")
     print()
-    for name in [
-        "total_wall_ms",
-        "post_genesis_wall_ms",
-        "avg_message_wall_us",
-        "messages_per_second",
-        "payload_hash_verify_us",
-        "dag_append_event_us",
-        "hash_bound_message_count",
-        "hot_path_signed_packet_count",
-        "signed_genesis_create_count",
-        "signed_genesis_verify_count",
-        "dag_segment_count",
-        "dag_segment_event_ms",
-        "agent_key_rotation_event_count",
-        "agent_key_rotation_signed_packet_count",
-        "agent_key_rotation_event_ms",
-        "dag_key_rotation_event_count",
-        "dag_key_rotation_event_ms",
-        "dag_nodes_retained",
-        "dag_nodes_pruned",
-    ]:
-        print(f"avg {name}: {_avg(summary, name):.3f}")
+    for name in REQUIRED_PERFORMANCE_FIELDS:
+        print(f"avg {name}: {_avg_text(summary, name)}")
     if payload["warnings"]:
         print()
         print("Warnings:")
