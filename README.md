@@ -310,6 +310,51 @@ In DAG-genesis mode, `hot_path_signed_packet_count` must be 0. The only signatur
 
 These are local loopback diagnostic metrics, not benchmark-grade claims.
 
+## Scaled Message Runs and Cadence Injection
+
+Scaled runs measure how DAG-genesis behaves as normal post-genesis message count grows. The lab can inject DAG segment signing cadence, external agent key rotation cadence, and internal DAG key rotation cadence to model long-running sessions.
+
+Normal AAIP messages remain unsigned in `dag-genesis` mode. The scaled path uses lab-level simulated DAG segment proofs and key-rotation events when Rust-backed primitives are not exposed, and reports those simulations with explicit metric flags such as `dag_segment_proof_simulated`, `agent_key_rotation_simulated`, `dag_key_rotation_simulated`, and `key_mode_simulated`.
+
+There are two key-rotation domains:
+
+1. Agent key rotation: external agent identity/public-key update. It is recorded as `AGENT_KEY_ROTATION_V0`, may use a rare signed AAIP/security update packet, and is not a new genesis node.
+2. DAG/internal key rotation: internal TRAX DAG signing authority rotation. It is controlled by DAG/Rust configuration when available, recorded as `DAG_KEY_ROTATION_V0`, and separate from external agent identity key rotation.
+
+Run scaled message comparisons:
+
+```powershell
+python .\scripts\scale_messages.py --mode dag-genesis
+
+python .\scripts\scale_messages.py --transport udp --mode dag-genesis --counts 10 100 1000 --runs 3
+
+python .\scripts\scale_messages.py --transport udp --mode dag-genesis --counts 1000 --dag-signing-cadence 8 --agent-key-rotation-cadence 100 --dag-key-rotation-cadence 1000 --key-mode separate --max-dag-nodes 100000 --runs 3
+
+python .\scripts\compare_modes.py --mode-a signed-envelope --mode-b dag-genesis --transport udp --messages 1000 --dag-signing-cadence 8 --agent-key-rotation-cadence 100 --dag-key-rotation-cadence 1000 --key-mode separate --max-dag-nodes 100000 --runs 3
+```
+
+The demos also accept these knobs directly:
+
+```powershell
+python -m trax_transport_lab.udp_demo --mode dag-genesis --messages 1000 --dag-signing-cadence 8 --agent-key-rotation-cadence 100 --dag-key-rotation-cadence 0 --key-mode separate --max-dag-nodes 100000
+
+python -m trax_transport_lab.tcp_demo --mode dag-genesis --messages 1000 --dag-signing-cadence 8 --key-rotation-cadence 100 --dag-key-rotation-cadence 1000 --key-mode derived --max-dag-nodes 100000 --seal-final-partial
+```
+
+In DAG-genesis mode:
+
+- `hot_path_signed_packet_count` should remain 0.
+- `signed_genesis_create_count` should remain 1.
+- `signed_genesis_verify_count` should remain 1.
+- `hash_bound_message_count` should grow with messages.
+- `dag_segment_count` should grow with messages / `dag_signing_cadence`.
+- `agent_key_rotation_event_count` should grow with messages / `agent_key_rotation_cadence`.
+- `dag_key_rotation_event_count` should grow with DAG node count / `dag_key_rotation_cadence`.
+
+`max_dag_nodes` controls how many DAG nodes/events are retained in memory during scaled runs. The lab keeps the current tip available, reports `dag_nodes_retained`, `dag_nodes_pruned`, and `dag_prune_count`, and accepts values of 100000 and higher for long-run diagnostics.
+
+These are local loopback diagnostic metrics, not benchmark-grade claims.
+
 ## Metrics
 
 Both demos return a `RunMetrics` object and print a text metrics section. The `--json` option emits machine-readable metrics:

@@ -126,6 +126,33 @@ class RunMetrics:
     signed_genesis_verify_count: int = 0
     hot_path_signed_packet_count: int = 0
     hash_bound_message_count: int = 0
+    messages: int | None = None
+    dag_signing_cadence: int = 8
+    dag_segment_count: int = 0
+    dag_segment_create_count: int = 0
+    dag_segment_verify_count: int = 0
+    dag_segment_proof_simulated: bool = True
+    agent_key_rotation_cadence: int = 0
+    key_rotation_cadence_alias_value: int | None = None
+    agent_key_rotation_event_count: int = 0
+    agent_key_rotation_create_count: int = 0
+    agent_key_rotation_verify_count: int = 0
+    agent_key_rotation_signed_packet_count: int = 0
+    agent_key_rotation_simulated: bool = True
+    dag_key_rotation_cadence: int = 0
+    dag_key_rotation_event_count: int = 0
+    dag_key_rotation_create_count: int = 0
+    dag_key_rotation_verify_count: int = 0
+    dag_key_rotation_simulated: bool = True
+    key_mode: str = "separate"
+    key_mode_simulated: bool = True
+    max_dag_nodes: int = 100_000
+    seal_final_partial: bool = False
+    dag_nodes_retained: int = 0
+    dag_nodes_pruned: int = 0
+    dag_prune_count: int = 0
+    post_genesis_wall_ns: int = 0
+    warnings: list[str] = field(default_factory=list)
     final_tip: str | None = None
     started_ns: int = field(default_factory=perf_counter_ns)
     ended_ns: int | None = None
@@ -240,6 +267,12 @@ class RunMetrics:
             self.dag_nodes_appended += 1
             if final_tip is not None:
                 self.final_tip = final_tip.hex()
+            if self.dag_nodes_appended <= self.max_dag_nodes:
+                self.dag_nodes_retained = self.dag_nodes_appended
+            else:
+                self.dag_nodes_retained = self.max_dag_nodes
+                self.dag_nodes_pruned = self.dag_nodes_appended - self.max_dag_nodes
+                self.dag_prune_count = self.dag_nodes_pruned
 
     def add_signed_envelope_create(self) -> None:
         with self._lock:
@@ -272,6 +305,54 @@ class RunMetrics:
     def add_hash_bound_message(self) -> None:
         with self._lock:
             self.hash_bound_message_count += 1
+
+    def add_dag_segment_create(self) -> None:
+        with self._lock:
+            self.dag_segment_create_count += 1
+
+    def add_dag_segment_verify(self) -> None:
+        with self._lock:
+            self.dag_segment_verify_count += 1
+
+    def add_agent_key_rotation_event(self) -> None:
+        with self._lock:
+            self.agent_key_rotation_event_count += 1
+
+    def add_agent_key_rotation_create(self) -> None:
+        with self._lock:
+            self.agent_key_rotation_create_count += 1
+
+    def add_agent_key_rotation_verify(self) -> None:
+        with self._lock:
+            self.agent_key_rotation_verify_count += 1
+
+    def add_agent_key_rotation_signed_packet(self) -> None:
+        with self._lock:
+            self.agent_key_rotation_signed_packet_count += 1
+
+    def add_dag_key_rotation_event(self) -> None:
+        with self._lock:
+            self.dag_key_rotation_event_count += 1
+
+    def add_dag_key_rotation_create(self) -> None:
+        with self._lock:
+            self.dag_key_rotation_create_count += 1
+
+    def add_dag_key_rotation_verify(self) -> None:
+        with self._lock:
+            self.dag_key_rotation_verify_count += 1
+
+    def track_dag_node_retention(self) -> None:
+        with self._lock:
+            if self.dag_nodes_appended <= self.max_dag_nodes:
+                self.dag_nodes_retained = self.dag_nodes_appended
+                return
+            self.dag_nodes_retained = self.max_dag_nodes
+            self.dag_nodes_pruned = self.dag_nodes_appended - self.max_dag_nodes
+            self.dag_prune_count = self.dag_nodes_pruned
+
+    def update_dag_retention(self) -> None:
+        self.track_dag_node_retention()
 
     def set_payload_bytes(self, byte_count: int) -> None:
         with self._lock:
@@ -374,6 +455,22 @@ class RunMetrics:
             )
             + self.named_event_total_ms("signed_envelope.verify"),
             "hash_bound_messages_event_us": self.named_event_total_us("hash_bound.message"),
+            "dag_segment_event_us": self.named_event_total_us("dag_segment.create")
+            + self.named_event_total_us("dag_segment.verify"),
+            "dag_segment_event_ms": self.named_event_total_ms("dag_segment.create")
+            + self.named_event_total_ms("dag_segment.verify"),
+            "agent_key_rotation_event_us": self.named_event_total_us(
+                "agent_key_rotation.event"
+            ),
+            "agent_key_rotation_event_ms": self.named_event_total_ms(
+                "agent_key_rotation.event"
+            ),
+            "dag_key_rotation_event_us": self.named_event_total_us(
+                "dag_key_rotation.event"
+            ),
+            "dag_key_rotation_event_ms": self.named_event_total_ms(
+                "dag_key_rotation.event"
+            ),
             "dag_append_event_us": self.named_event_total_us("dag.append_node"),
         }
 
@@ -417,6 +514,47 @@ class RunMetrics:
             "signed_genesis_verify_count": self.signed_genesis_verify_count,
             "hot_path_signed_packet_count": self.hot_path_signed_packet_count,
             "hash_bound_message_count": self.hash_bound_message_count,
+            "agent_key_rotation_signed_packet_count": self.agent_key_rotation_signed_packet_count,
+        }
+
+    def scaled_summary(self) -> dict[str, int | float | str | bool | None]:
+        messages = self.messages
+        post_ms = self.post_genesis_wall_ns / 1_000_000
+        if messages and self.post_genesis_wall_ns:
+            avg_message_wall_us = self.post_genesis_wall_ns / messages / 1_000
+            messages_per_second = messages / (self.post_genesis_wall_ns / 1_000_000_000)
+        else:
+            avg_message_wall_us = 0.0
+            messages_per_second = 0.0
+        return {
+            "messages": messages,
+            "dag_signing_cadence": self.dag_signing_cadence,
+            "agent_key_rotation_cadence": self.agent_key_rotation_cadence,
+            "key_rotation_cadence_alias_value": self.key_rotation_cadence_alias_value,
+            "dag_key_rotation_cadence": self.dag_key_rotation_cadence,
+            "key_mode": self.key_mode,
+            "key_mode_simulated": self.key_mode_simulated,
+            "max_dag_nodes": self.max_dag_nodes,
+            "seal_final_partial": self.seal_final_partial,
+            "post_genesis_wall_ms": post_ms,
+            "avg_message_wall_us": avg_message_wall_us,
+            "messages_per_second": messages_per_second,
+            "dag_segment_count": self.dag_segment_count,
+            "dag_segment_create_count": self.dag_segment_create_count,
+            "dag_segment_verify_count": self.dag_segment_verify_count,
+            "dag_segment_proof_simulated": self.dag_segment_proof_simulated,
+            "agent_key_rotation_event_count": self.agent_key_rotation_event_count,
+            "agent_key_rotation_create_count": self.agent_key_rotation_create_count,
+            "agent_key_rotation_verify_count": self.agent_key_rotation_verify_count,
+            "agent_key_rotation_signed_packet_count": self.agent_key_rotation_signed_packet_count,
+            "agent_key_rotation_simulated": self.agent_key_rotation_simulated,
+            "dag_key_rotation_event_count": self.dag_key_rotation_event_count,
+            "dag_key_rotation_create_count": self.dag_key_rotation_create_count,
+            "dag_key_rotation_verify_count": self.dag_key_rotation_verify_count,
+            "dag_key_rotation_simulated": self.dag_key_rotation_simulated,
+            "dag_nodes_retained": self.dag_nodes_retained,
+            "dag_nodes_pruned": self.dag_nodes_pruned,
+            "dag_prune_count": self.dag_prune_count,
         }
 
     def counts_summary(self) -> dict[str, int]:
@@ -430,6 +568,11 @@ class RunMetrics:
             "payload_bytes": self.payload_bytes,
             "dag_nodes_appended": self.dag_nodes_appended,
             **self.signing_counts_summary(),
+            "dag_segment_count": self.dag_segment_count,
+            "agent_key_rotation_event_count": self.agent_key_rotation_event_count,
+            "dag_key_rotation_event_count": self.dag_key_rotation_event_count,
+            "dag_nodes_retained": self.dag_nodes_retained,
+            "dag_nodes_pruned": self.dag_nodes_pruned,
         }
 
     def slowest_events(
@@ -473,7 +616,10 @@ class RunMetrics:
             "micro_highlights": self.micro_highlights(),
             "counts": self.counts_summary(),
             "signing_counts": self.signing_counts_summary(),
+            "scaled": self.scaled_summary(),
+            **self.scaled_summary(),
             "final_tip": self.final_tip,
+            "warnings": list(self.warnings),
             "key_event_summary": self.key_event_summary(),
             "slowest_events": self.slowest_events(10),
         }
@@ -534,6 +680,9 @@ class RunMetrics:
             f"signed_genesis_verify_event_ms: {micro['signed_genesis_verify_event_ms']:.3f}",
             f"hot_path_signed_packet_event_ms: {micro['hot_path_signed_packet_event_ms']:.3f}",
             f"hash_bound_messages_event_us: {micro['hash_bound_messages_event_us']:.3f}",
+            f"dag_segment_event_ms: {micro['dag_segment_event_ms']:.3f}",
+            f"agent_key_rotation_event_ms: {micro['agent_key_rotation_event_ms']:.3f}",
+            f"dag_key_rotation_event_ms: {micro['dag_key_rotation_event_ms']:.3f}",
             "",
             "Counts:",
             f"bytes_sent: {counts['bytes_sent']}",
@@ -567,6 +716,35 @@ class RunMetrics:
                 f"signed_genesis_verify_count: {signing_counts['signed_genesis_verify_count']}",
                 f"hot_path_signed_packet_count: {signing_counts['hot_path_signed_packet_count']}",
                 f"hash_bound_message_count: {signing_counts['hash_bound_message_count']}",
+                f"agent_key_rotation_signed_packet_count: {signing_counts['agent_key_rotation_signed_packet_count']}",
+                "",
+                "Scaled DAG-genesis controls:",
+                f"messages: {self.messages if self.messages is not None else '<default>'}",
+                f"dag_signing_cadence: {self.dag_signing_cadence}",
+                f"agent_key_rotation_cadence: {self.agent_key_rotation_cadence}",
+                f"key_rotation_cadence_alias_value: {self.key_rotation_cadence_alias_value}",
+                f"dag_key_rotation_cadence: {self.dag_key_rotation_cadence}",
+                f"key_mode: {self.key_mode}",
+                f"key_mode_simulated: {self.key_mode_simulated}",
+                f"max_dag_nodes: {self.max_dag_nodes}",
+                f"seal_final_partial: {self.seal_final_partial}",
+                f"post_genesis_wall_ms: {self.scaled_summary()['post_genesis_wall_ms']:.3f}",
+                f"avg_message_wall_us: {self.scaled_summary()['avg_message_wall_us']:.3f}",
+                f"messages_per_second: {self.scaled_summary()['messages_per_second']:.3f}",
+                f"dag_segment_count: {self.dag_segment_count}",
+                f"dag_segment_create_count: {self.dag_segment_create_count}",
+                f"dag_segment_verify_count: {self.dag_segment_verify_count}",
+                f"dag_segment_proof_simulated: {self.dag_segment_proof_simulated}",
+                f"agent_key_rotation_event_count: {self.agent_key_rotation_event_count}",
+                f"agent_key_rotation_create_count: {self.agent_key_rotation_create_count}",
+                f"agent_key_rotation_verify_count: {self.agent_key_rotation_verify_count}",
+                f"agent_key_rotation_simulated: {self.agent_key_rotation_simulated}",
+                f"dag_key_rotation_event_count: {self.dag_key_rotation_event_count}",
+                f"dag_key_rotation_create_count: {self.dag_key_rotation_create_count}",
+                f"dag_key_rotation_verify_count: {self.dag_key_rotation_verify_count}",
+                f"dag_key_rotation_simulated: {self.dag_key_rotation_simulated}",
+                f"dag_nodes_retained: {self.dag_nodes_retained}",
+                f"dag_nodes_pruned: {self.dag_nodes_pruned}",
                 "",
                 "Delta-ready metrics:",
                 f"payload_hash_verify_us: {micro['payload_hash_verify_us']:.3f}",
@@ -578,9 +756,14 @@ class RunMetrics:
                 f"signed_genesis_create_event_ms: {micro['signed_genesis_create_event_ms']:.3f}",
                 f"signed_genesis_verify_event_ms: {micro['signed_genesis_verify_event_ms']:.3f}",
                 f"hot_path_signed_packet_event_ms: {micro['hot_path_signed_packet_event_ms']:.3f}",
+                f"dag_segment_event_ms: {micro['dag_segment_event_ms']:.3f}",
+                f"agent_key_rotation_event_ms: {micro['agent_key_rotation_event_ms']:.3f}",
+                f"dag_key_rotation_event_ms: {micro['dag_key_rotation_event_ms']:.3f}",
                 "",
             ]
         )
+        if self.warnings:
+            lines.extend(["Warnings:", *self.warnings, ""])
         if self.mode == "dag-genesis":
             lines.extend(
                 [
@@ -665,6 +848,20 @@ def summarize_metric_runs(metrics_runs: list[RunMetrics]) -> dict:
         "hot_path_signed_packet_event_ms": lambda m: m.micro_highlights()[
             "hot_path_signed_packet_event_ms"
         ],
+        "dag_segment_event_ms": lambda m: m.micro_highlights()["dag_segment_event_ms"],
+        "dag_segment_event_us": lambda m: m.micro_highlights()["dag_segment_event_us"],
+        "agent_key_rotation_event_ms": lambda m: m.micro_highlights()[
+            "agent_key_rotation_event_ms"
+        ],
+        "agent_key_rotation_event_us": lambda m: m.micro_highlights()[
+            "agent_key_rotation_event_us"
+        ],
+        "dag_key_rotation_event_ms": lambda m: m.micro_highlights()[
+            "dag_key_rotation_event_ms"
+        ],
+        "dag_key_rotation_event_us": lambda m: m.micro_highlights()[
+            "dag_key_rotation_event_us"
+        ],
         "signed_envelope_create_count": lambda m: m.signing_counts_summary()[
             "signed_envelope_create_count"
         ],
@@ -689,6 +886,25 @@ def summarize_metric_runs(metrics_runs: list[RunMetrics]) -> dict:
         "hash_bound_message_count": lambda m: m.signing_counts_summary()[
             "hash_bound_message_count"
         ],
+        "agent_key_rotation_signed_packet_count": lambda m: m.signing_counts_summary()[
+            "agent_key_rotation_signed_packet_count"
+        ],
+        "messages": lambda m: float(m.messages or 0),
+        "post_genesis_wall_ms": lambda m: m.scaled_summary()["post_genesis_wall_ms"],
+        "avg_message_wall_us": lambda m: m.scaled_summary()["avg_message_wall_us"],
+        "messages_per_second": lambda m: m.scaled_summary()["messages_per_second"],
+        "dag_segment_count": lambda m: m.dag_segment_count,
+        "dag_segment_create_count": lambda m: m.dag_segment_create_count,
+        "dag_segment_verify_count": lambda m: m.dag_segment_verify_count,
+        "agent_key_rotation_event_count": lambda m: m.agent_key_rotation_event_count,
+        "agent_key_rotation_create_count": lambda m: m.agent_key_rotation_create_count,
+        "agent_key_rotation_verify_count": lambda m: m.agent_key_rotation_verify_count,
+        "dag_key_rotation_event_count": lambda m: m.dag_key_rotation_event_count,
+        "dag_key_rotation_create_count": lambda m: m.dag_key_rotation_create_count,
+        "dag_key_rotation_verify_count": lambda m: m.dag_key_rotation_verify_count,
+        "dag_nodes_retained": lambda m: m.dag_nodes_retained,
+        "dag_nodes_pruned": lambda m: m.dag_nodes_pruned,
+        "dag_prune_count": lambda m: m.dag_prune_count,
         "trax_hash32_event_us": lambda m: m.micro_highlights()["trax_hash32_event_us"],
         "trax_create_envelope_event_ms": lambda m: m.micro_highlights()[
             "trax_create_envelope_event_ms"

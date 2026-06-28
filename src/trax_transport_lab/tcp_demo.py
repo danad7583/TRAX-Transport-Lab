@@ -25,6 +25,14 @@ from .messages import (
     hex_to_bytes,
 )
 from .trax_adapter import TraxAdapter
+from .scaled import (
+    ScaleConfig,
+    add_scale_arguments,
+    apply_scale_metadata,
+    make_scale_config,
+    scale_config_from_args,
+    simulate_scaled_messages,
+)
 from .transport_common import (
     TransportDemoResult,
     print_repeated_json,
@@ -773,6 +781,7 @@ def run_tcp_demo(
     adverse_case: str | None = None,
     adapter: TraxAdapter | None = None,
     mode: str = SIGNED_ENVELOPE_MODE,
+    scale_config: ScaleConfig | None = None,
 ) -> TcpDemoResult:
     if mode not in MODE_CHOICES:
         raise ValueError(f"unsupported mode={mode!r}")
@@ -817,7 +826,25 @@ def run_tcp_demo(
         log.reject("<server>", error)
 
     expected_nodes = 3 if mode == CHECKPOINT_MODE else 2
-    metrics.finish(dag.final_tip())
+    final_tip = dag.final_tip()
+    if scale_config is None:
+        scale_config = make_scale_config()
+    if final_tip is not None and scale_config.messages is not None:
+        try:
+            final_tip = simulate_scaled_messages(
+                mode=mode,
+                metrics=metrics,
+                config=scale_config,
+                session_id=adapter.hash32(INIT_SESSION_ID_SEED),
+                initial_tip=final_tip,
+            )
+        except ValueError as exc:
+            error = error or str(exc)
+            log.reject("scaled-messages", str(exc))
+    else:
+        apply_scale_metadata(metrics, scale_config)
+        metrics.update_dag_retention()
+    metrics.finish(final_tip)
     invariant_error = _dag_genesis_invariant_error(metrics) if mode == DAG_GENESIS_MODE else None
     if invariant_error is not None:
         error = error or invariant_error
@@ -836,14 +863,14 @@ def run_tcp_demo(
     if ok:
         log.add("")
         log.add("Final tip:")
-        log.add(dag.final_tip().hex() if dag.final_tip() else "<none>")
+        log.add(final_tip.hex() if final_tip else "<none>")
         log.add("")
         log.lines.extend(metrics.summary_lines())
     return TcpDemoResult(
         ok=ok,
         transport="tcp",
         dag_nodes=dag.enumerate(),
-        final_tip=dag.final_tip(),
+        final_tip=final_tip,
         log_lines=list(log.lines),
         metrics=metrics,
         error=error,
@@ -1275,10 +1302,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--include-events", action="store_true", help="include raw metric events in JSON")
     parser.add_argument("--runs", type=int, default=1, help="run the demo N times")
     parser.add_argument("--mode", choices=MODE_CHOICES, default=SIGNED_ENVELOPE_MODE)
+    add_scale_arguments(parser)
     args = parser.parse_args(argv)
+    try:
+        scale_config = scale_config_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     def run_selected_mode() -> TcpDemoResult:
-        return run_tcp_demo(mode=args.mode)
+        return run_tcp_demo(mode=args.mode, scale_config=scale_config)
 
     if args.runs != 1:
         results = run_repeated(run_selected_mode, args.runs)

@@ -12,6 +12,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from trax_transport_lab.metrics import RunMetrics, summarize_metric_runs
+from trax_transport_lab.scaled import (
+    ScaleConfig,
+    add_scale_arguments,
+    scale_config_from_args,
+)
 from trax_transport_lab.tcp_demo import (
     CHECKPOINT_MODE,
     DAG_GENESIS_MODE,
@@ -25,9 +30,14 @@ from trax_transport_lab.udp_demo import run_udp_demo
 TRANSPORTS = ("tcp", "udp")
 
 
-def _run_transport(transport: str, mode: str, runs: int):
+def _run_transport(
+    transport: str,
+    mode: str,
+    runs: int,
+    scale_config: ScaleConfig | None = None,
+):
     fn = run_tcp_demo if transport == "tcp" else run_udp_demo
-    return [fn(mode=mode) for _ in range(runs)]
+    return [fn(mode=mode, scale_config=scale_config) for _ in range(runs)]
 
 
 def _avg(summary: dict, name: str) -> float:
@@ -55,8 +65,13 @@ def _operation_count_summary(metrics_runs: list[RunMetrics]) -> dict[str, float]
     }
 
 
-def _mode_payload(transport: str, mode: str, runs: int) -> dict:
-    results = _run_transport(transport, mode, runs)
+def _mode_payload(
+    transport: str,
+    mode: str,
+    runs: int,
+    scale_config: ScaleConfig | None = None,
+) -> dict:
+    results = _run_transport(transport, mode, runs, scale_config)
     metrics_runs = [result.metrics for result in results]
     summary = summarize_metric_runs(metrics_runs)
     summary["signing_operation_count"] = _operation_count_summary(metrics_runs)
@@ -65,6 +80,7 @@ def _mode_payload(transport: str, mode: str, runs: int) -> dict:
         "transport": transport,
         "mode": mode,
         "runs": runs,
+        "messages": scale_config.messages if scale_config else None,
         "summary": summary,
         "final_tips": [
             result.final_tip.hex() if result.final_tip else None
@@ -88,6 +104,10 @@ def _delta_payload(mode_a_payload: dict, mode_b_payload: dict) -> dict:
             mode_b, "hot_path_signed_packet_count"
         )
         - _avg(mode_a, "hot_path_signed_packet_count"),
+        "avg_message_wall_us_delta": _avg(mode_b, "avg_message_wall_us")
+        - _avg(mode_a, "avg_message_wall_us"),
+        "messages_per_second_delta": _avg(mode_b, "messages_per_second")
+        - _avg(mode_a, "messages_per_second"),
         "signed_envelope_event_ms_delta": _avg(
             mode_b, "signed_envelope_create_event_ms"
         )
@@ -108,6 +128,18 @@ def _delta_payload(mode_a_payload: dict, mode_b_payload: dict) -> dict:
             mode_b, "signing_operation_count"
         )
         - _avg(mode_a, "signing_operation_count"),
+        "dag_event_ms_delta": _avg(mode_b, "dag_event_ms")
+        - _avg(mode_a, "dag_event_ms"),
+        "dag_segment_count_delta": _avg(mode_b, "dag_segment_count")
+        - _avg(mode_a, "dag_segment_count"),
+        "agent_key_rotation_event_count_delta": _avg(
+            mode_b, "agent_key_rotation_event_count"
+        )
+        - _avg(mode_a, "agent_key_rotation_event_count"),
+        "dag_key_rotation_event_count_delta": _avg(
+            mode_b, "dag_key_rotation_event_count"
+        )
+        - _avg(mode_a, "dag_key_rotation_event_count"),
     }
 
 
@@ -116,17 +148,19 @@ def comparison_payload(
     runs: int,
     mode_a: str = SIGNED_ENVELOPE_MODE,
     mode_b: str = DAG_GENESIS_MODE,
+    scale_config: ScaleConfig | None = None,
 ) -> dict:
     payload = {
         "note": "local loopback diagnostic metrics; not benchmark-grade results",
         "runs": runs,
         "mode_a": mode_a,
         "mode_b": mode_b,
+        "messages": scale_config.messages if scale_config else None,
         "transports": {},
     }
     for transport in transports:
-        first = _mode_payload(transport, mode_a, runs)
-        second = _mode_payload(transport, mode_b, runs)
+        first = _mode_payload(transport, mode_a, runs, scale_config)
+        second = _mode_payload(transport, mode_b, runs, scale_config)
         payload["transports"][transport] = {
             mode_a: first,
             mode_b: second,
@@ -154,6 +188,18 @@ def _print_mode_summary(label: str, summary: dict) -> None:
         "signed_checkpoint_create_count",
         "signed_checkpoint_verify_count",
         "hash_bound_message_count",
+        "post_genesis_wall_ms",
+        "avg_message_wall_us",
+        "messages_per_second",
+        "dag_segment_count",
+        "dag_segment_event_ms",
+        "agent_key_rotation_event_count",
+        "agent_key_rotation_signed_packet_count",
+        "agent_key_rotation_event_ms",
+        "dag_key_rotation_event_count",
+        "dag_key_rotation_event_ms",
+        "dag_nodes_retained",
+        "dag_nodes_pruned",
         "signed_envelope_create_event_ms",
         "signed_envelope_verify_event_ms",
         "signed_genesis_create_event_ms",
@@ -204,13 +250,24 @@ def main(argv: list[str] | None = None) -> int:
         help="transport to compare",
     )
     parser.add_argument("--json", action="store_true", help="emit JSON only")
+    add_scale_arguments(parser)
     args = parser.parse_args(argv)
 
     if args.runs < 1:
         raise SystemExit("--runs must be >= 1")
+    try:
+        scale_config = scale_config_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     transports = list(TRANSPORTS if args.transport == "both" else (args.transport,))
-    payload = comparison_payload(transports, args.runs, args.mode_a, args.mode_b)
+    payload = comparison_payload(
+        transports,
+        args.runs,
+        args.mode_a,
+        args.mode_b,
+        scale_config,
+    )
     if args.json:
         print(json.dumps(payload, sort_keys=True))
     else:
