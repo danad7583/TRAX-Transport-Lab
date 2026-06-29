@@ -116,8 +116,26 @@ Resources:
           export TRAX_TCP_LAB_STATUS_DIR='/opt/trax/status'
           export TRAX_TCP_LAB_BOOTSTRAP_LOG='/var/log/trax-tcp-lab-bootstrap.log'
           export TRAX_TCP_LAB_TEST_LOG='/var/log/trax-tcp-lab-test.log'
+          export TRAX_TCP_LAB_BOOTSTRAP_SCRIPT="${!TRAX_TCP_LAB_ROOT}/cloud/aws/cloudformation/scripts/bootstrap-trax-tcp-lab.sh"
 
           exec > >(tee -a "${!TRAX_TCP_LAB_BOOTSTRAP_LOG}") 2>&1
+
+          write_userdata_failure() {
+            local message="$1"
+            mkdir -p "${!TRAX_TCP_LAB_STATUS_DIR}"
+            cat > "${!TRAX_TCP_LAB_STATUS_DIR}/bootstrap-status.json" <<EOF
+          {
+            "state": "failed",
+            "message": "${!message}",
+            "repo_url": "${RepoUrl}",
+            "repo_branch": "${RepoBranch}",
+            "lab_root": "/opt/trax/tcp-transport-lab",
+            "bootstrap_log": "/var/log/trax-tcp-lab-bootstrap.log",
+            "test_log": "/var/log/trax-tcp-lab-test.log",
+            "updated_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          }
+          EOF
+          }
 
           install_git() {
             if command -v git >/dev/null 2>&1; then
@@ -147,8 +165,14 @@ Resources:
             git -C "${!TRAX_TCP_LAB_ROOT}" pull --ff-only origin "${!TRAX_TCP_LAB_REPO_BRANCH}" || true
           fi
 
-          chmod +x "${!TRAX_TCP_LAB_ROOT}/cloud/aws/cloudformation/scripts/bootstrap-trax-tcp-lab.sh"
-          "${!TRAX_TCP_LAB_ROOT}/cloud/aws/cloudformation/scripts/bootstrap-trax-tcp-lab.sh"
+          if [ ! -f "${!TRAX_TCP_LAB_BOOTSTRAP_SCRIPT}" ]; then
+            write_userdata_failure "Bootstrap script missing after cloning ${RepoUrl} branch ${RepoBranch}: ${!TRAX_TCP_LAB_BOOTSTRAP_SCRIPT}"
+            echo "Missing bootstrap script: ${!TRAX_TCP_LAB_BOOTSTRAP_SCRIPT}" >&2
+            exit 10
+          fi
+
+          chmod +x "${!TRAX_TCP_LAB_BOOTSTRAP_SCRIPT}"
+          "${!TRAX_TCP_LAB_BOOTSTRAP_SCRIPT}"
 
 Outputs:
   InstanceId:

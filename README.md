@@ -101,6 +101,8 @@ Cloud deployment support lives under `cloud/` at the repository root. Do not pla
 
 The CloudFormation stack supports the TCP Transport Lab cloud validation phase by provisioning one persistent Linux EC2 instance that pulls, builds, and runs this same TCP/UDP Transport Lab repository.
 
+On Amazon Linux 2023 the EC2 bootstrap uses Python 3.11, clones TRAX Core from `https://github.com/danad7583/TRAX.git`, builds the `trax` Python module with `maturin develop`, and runs pytest plus TCP/UDP DAG-genesis smoke tests. SSM Session Manager is the preferred access path. Never commit `.pem` files or private keys.
+
 Template path:
 
 ```bash

@@ -37,6 +37,8 @@ The stack creates:
 
 No ECS, EKS, Docker, Kubernetes, autoscaling group, or load balancer is added for this milestone.
 
+SSM Session Manager is the preferred access path for this lab. The stack still accepts `KeyName` for SSH fallback, but EC2 private key files must remain local operator secrets. Never commit `.pem` files or private keys to this repository.
+
 ## Deploy
 
 Run from the repository root:
@@ -59,14 +61,52 @@ aws cloudformation deploy \
 
 The EC2 bootstrap flow:
 
-1. Installs Linux build/runtime dependencies.
+1. Installs Amazon Linux 2023 build/runtime dependencies.
 2. Clones this TCP Transport Lab repository.
-3. Creates a Python virtual environment.
-4. Installs Python dependencies.
-5. Builds/installs TRAX Python bindings through the lab's existing `scripts/bootstrap_trax.py`.
-6. Runs the existing TCP lab validation command, `python scripts/run_all.py`.
-7. Saves logs under `/var/log/trax-tcp-lab-bootstrap.log` and `/var/log/trax-tcp-lab-test.log`.
-8. Writes status to `/opt/trax/status/bootstrap-status.json`.
+3. Uses Python 3.11 because Amazon Linux 2023's default `python3` is currently Python 3.9 and the lab requires Python >= 3.10.
+4. Creates a Python virtual environment with `python3.11 -m venv .venv`.
+5. Installs `pip`, `setuptools`, `wheel`, `maturin`, and `pytest`.
+6. Clones TRAX Core from `https://github.com/danad7583/TRAX.git` into `external/TRAX`.
+7. Builds and installs the required `trax` Python module into the active venv with `maturin develop`.
+8. Installs the TCP Transport Lab package in editable mode.
+9. Runs `python -m pytest`.
+10. Runs TCP and UDP DAG-genesis smoke demos with 10 messages each.
+11. Verifies the expected DAG-genesis trust model in the smoke output: one signed genesis create, one signed genesis verify, and zero hot-path signed packets.
+12. Saves logs under `/var/log/trax-tcp-lab-bootstrap.log` and `/var/log/trax-tcp-lab-test.log`.
+13. Writes status to `/opt/trax/status/bootstrap-status.json`.
+
+Expected fresh EC2 validation:
+
+- `python -m pytest` passes with 108 tests.
+- `python -m trax_transport_lab.tcp_demo --mode dag-genesis --messages 10` passes.
+- `python -m trax_transport_lab.udp_demo --mode dag-genesis --messages 10` passes.
+- DAG-genesis metrics show:
+  - `signed_genesis_create_count: 1`
+  - `signed_genesis_verify_count: 1`
+  - `hot_path_signed_packet_count: 0`
+
+Local loopback and single-node cloud metrics are diagnostic only. They are useful for validation and regression tracking, not benchmark-grade performance claims.
+
+## Logs and Status
+
+The bootstrap writes:
+
+- `/var/log/trax-tcp-lab-bootstrap.log`
+- `/var/log/trax-tcp-lab-test.log`
+- `/opt/trax/status/bootstrap-status.json`
+
+Check status through SSM:
+
+```bash
+sudo cat /opt/trax/status/bootstrap-status.json
+```
+
+Review logs through SSM:
+
+```bash
+sudo tail -200 /var/log/trax-tcp-lab-bootstrap.log
+sudo tail -200 /var/log/trax-tcp-lab-test.log
+```
 
 ## Validate IaC Locally
 
