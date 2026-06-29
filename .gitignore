@@ -11,3 +11,6 @@ external/TRAX/.venv/
 external/TRAX/
 !external/.gitkeep
 .DS_Store
+
+# EC2 private keys
+*.pem
