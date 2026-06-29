@@ -76,6 +76,61 @@ python .\scripts\run_all.py
 
 `run_all.py` validates both the signed-envelope baseline and the DAG-genesis intended hot-path model. It runs the default TCP/UDP demos for backward compatibility, then runs the DAG-genesis TCP/UDP demos, signed-envelope vs DAG-genesis mode comparisons, and a DAG-genesis TCP-vs-UDP comparison.
 
+## Repository Layout
+
+```text
+trax_transport_lab/
+  Python lab package and TCP/UDP demo logic.
+
+tests/
+  Local and CI tests for lab behavior.
+
+scripts/
+  Local lab runner scripts such as run_all.py, scale_messages.py, compare_modes.py.
+
+cloud/
+  Cloud provider support for running the lab on persistent infrastructure.
+
+cloud/aws/cloudformation/
+  AWS CloudFormation templates and bootstrap scripts for persistent EC2 lab testing.
+```
+
+Cloud deployment support lives under `cloud/` at the repository root. Do not place CloudFormation files under `trax_transport_lab/`, `tests/`, or the normal lab `scripts/` directory.
+
+## AWS Cloud Validation
+
+The CloudFormation stack supports the TCP Transport Lab cloud validation phase by provisioning one persistent Linux EC2 instance that pulls, builds, and runs this same TCP/UDP Transport Lab repository.
+
+Template path:
+
+```bash
+cloud/aws/cloudformation/trax-tcp-lab-ec2.yaml
+```
+
+Deploy from the repository root:
+
+```bash
+aws cloudformation deploy \
+  --template-file cloud/aws/cloudformation/trax-tcp-lab-ec2.yaml \
+  --stack-name trax-tcp-lab \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides \
+    VpcId=vpc-xxxx \
+    SubnetId=subnet-xxxx \
+    KeyName=my-key \
+    AllowedSshCidr=x.x.x.x/32 \
+    RepoUrl=https://github.com/<owner>/<tcp-lab-repo>.git \
+    RepoBranch=main
+```
+
+Validate the IaC files from the repository root:
+
+```bash
+bash cloud/aws/cloudformation/scripts/validate-trax-iac.sh
+```
+
+No container orchestration is introduced for this milestone. No ECS, EKS, Docker, Kubernetes, autoscaling group, or load balancer is added.
+
 Expected TCP demo output includes:
 
 ```text

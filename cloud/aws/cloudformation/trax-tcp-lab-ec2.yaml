@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Persistent EC2 host for TCP Transport Lab cloud validation.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the TCP Transport Lab EC2 instance will run.
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet for the TCP Transport Lab EC2 instance.
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 key pair for SSH access.
+  AllowedSshCidr:
+    Type: String
+    Description: CIDR block allowed to SSH to the lab instance.
+    AllowedPattern: ^(([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}|[0-9a-fA-F:]+/[0-9]{1,3})$
+    ConstraintDescription: Must be an IPv4 or IPv6 CIDR block, such as x.x.x.x/32.
+  RepoUrl:
+    Type: String
+    Description: Git URL for this TCP Transport Lab repository.
+    AllowedPattern: ^https://.+\.git$
+  RepoBranch:
+    Type: String
+    Default: main
+    Description: Branch, tag, or commit to check out for cloud validation.
+  InstanceType:
+    Type: String
+    Default: t3.small
+    Description: EC2 instance type for persistent lab validation.
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: SSM parameter resolving to the Linux AMI used by the lab instance.
+
+Resources:
+  TraxTcpLabSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSH access for the persistent TCP Transport Lab EC2 host.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: SSH from approved operator CIDR.
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSshCidr
+      SecurityGroupEgress:
+        - Description: Allow outbound package, git, and Python dependency downloads.
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: trax-tcp-lab-ec2-sg
+        - Key: Project
+          Value: trax-tcp-lab
+
+  TraxTcpLabInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-ec2-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Project
+          Value: trax-tcp-lab
+
+  TraxTcpLabInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${AWS::StackName}-ec2-profile
+      Roles:
+        - !Ref TraxTcpLabInstanceRole
+
+  TraxTcpLabInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref TraxTcpLabInstanceProfile
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds:
+        - !Ref TraxTcpLabSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: trax-tcp-lab
+        - Key: Project
+          Value: trax-tcp-lab
+      UserData:
+        Fn::Base64: !Sub |
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+
+          export TRAX_TCP_LAB_REPO_URL='${RepoUrl}'
+          export TRAX_TCP_LAB_REPO_BRANCH='${RepoBranch}'
+          export TRAX_TCP_LAB_ROOT='/opt/trax/tcp-transport-lab'
+          export TRAX_TCP_LAB_STATUS_DIR='/opt/trax/status'
+          export TRAX_TCP_LAB_BOOTSTRAP_LOG='/var/log/trax-tcp-lab-bootstrap.log'
+          export TRAX_TCP_LAB_TEST_LOG='/var/log/trax-tcp-lab-test.log'
+
+          exec > >(tee -a "${!TRAX_TCP_LAB_BOOTSTRAP_LOG}") 2>&1
+
+          install_git() {
+            if command -v git >/dev/null 2>&1; then
+              return 0
+            fi
+            if command -v dnf >/dev/null 2>&1; then
+              dnf install -y git
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y git
+            elif command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y git
+            else
+              echo "No supported package manager found for git installation." >&2
+              exit 1
+            fi
+          }
+
+          mkdir -p "$(dirname "${!TRAX_TCP_LAB_ROOT}")" "${!TRAX_TCP_LAB_STATUS_DIR}"
+          install_git
+
+          if [ ! -d "${!TRAX_TCP_LAB_ROOT}/.git" ]; then
+            git clone --branch "${!TRAX_TCP_LAB_REPO_BRANCH}" "${!TRAX_TCP_LAB_REPO_URL}" "${!TRAX_TCP_LAB_ROOT}"
+          else
+            git -C "${!TRAX_TCP_LAB_ROOT}" fetch origin "${!TRAX_TCP_LAB_REPO_BRANCH}"
+            git -C "${!TRAX_TCP_LAB_ROOT}" checkout "${!TRAX_TCP_LAB_REPO_BRANCH}"
+            git -C "${!TRAX_TCP_LAB_ROOT}" pull --ff-only origin "${!TRAX_TCP_LAB_REPO_BRANCH}" || true
+          fi
+
+          chmod +x "${!TRAX_TCP_LAB_ROOT}/cloud/aws/cloudformation/scripts/bootstrap-trax-tcp-lab.sh"
+          "${!TRAX_TCP_LAB_ROOT}/cloud/aws/cloudformation/scripts/bootstrap-trax-tcp-lab.sh"
+
+Outputs:
+  InstanceId:
+    Description: EC2 instance ID for the persistent TCP Transport Lab host.
+    Value: !Ref TraxTcpLabInstance
+  PrivateIp:
+    Description: Private IP address of the TCP Transport Lab EC2 instance.
+    Value: !GetAtt TraxTcpLabInstance.PrivateIp
+  BootstrapLog:
+    Description: Bootstrap log path on the EC2 instance.
+    Value: /var/log/trax-tcp-lab-bootstrap.log
+  TestLog:
+    Description: Lab validation log path on the EC2 instance.
+    Value: /var/log/trax-tcp-lab-test.log
+  BootstrapStatus:
+    Description: Bootstrap status JSON path on the EC2 instance.
+    Value: /opt/trax/status/bootstrap-status.json
