@@ -108,6 +108,119 @@ sudo tail -200 /var/log/trax-tcp-lab-bootstrap.log
 sudo tail -200 /var/log/trax-tcp-lab-test.log
 ```
 
+## EC2-to-EC2 Bidirectional TCP Peer Session
+
+This lab uses Option A: update the existing CloudFormation stack, then pull the updated repository on both already-running EC2 instances. Do not delete and recreate the stack for this step.
+
+Discover the private IPs for the two running lab instances:
+
+```bash
+aws ec2 describe-instances \
+  --filters "Name=tag:Name,Values=trax-tcp-lab" "Name=instance-state-name,Values=running" \
+  --query "Reservations[].Instances[].{InstanceId:InstanceId,PrivateIp:PrivateIpAddress,PublicIp:PublicIpAddress,AZ:Placement.AvailabilityZone}" \
+  --output table
+```
+
+Update the existing stack from the repository root. The template path in this repo is `cloud/aws/cloudformation/trax-tcp-lab-ec2.yaml`:
+
+```powershell
+aws cloudformation deploy `
+  --stack-name trax-tcp-lab-ec2-v2 `
+  --template-file cloud/aws/cloudformation/trax-tcp-lab-ec2.yaml `
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+The stack update adds private EC2-to-EC2 TCP ingress on port `39100` through a security-group self-reference. It does not expose port `39100` to `0.0.0.0/0`.
+
+After the repo changes are pushed, update both EC2 instances through SSM:
+
+```bash
+cd /opt/trax/tcp-transport-lab
+git pull origin main
+source .venv/bin/activate
+python -m pip install -e .
+python -m pytest
+```
+
+Start the receiver on EC2-B first:
+
+```bash
+cd /opt/trax/tcp-transport-lab
+source .venv/bin/activate
+
+python -m trax_transport_lab.tcp_peer \
+  --node-id ec2-b \
+  --listen-host 0.0.0.0 \
+  --listen-port 39100 \
+  --peer-host <ec2-a-private-ip> \
+  --peer-port 39100 \
+  --mode dag-genesis \
+  --key-mode shared \
+  --json
+```
+
+Start the initiator on EC2-A second:
+
+```bash
+cd /opt/trax/tcp-transport-lab
+source .venv/bin/activate
+
+python -m trax_transport_lab.tcp_peer \
+  --node-id ec2-a \
+  --listen-host 0.0.0.0 \
+  --listen-port 39100 \
+  --peer-host <ec2-b-private-ip> \
+  --peer-port 39100 \
+  --mode dag-genesis \
+  --duration-seconds 60 \
+  --payload-size 1048576 \
+  --chunk-size 1400 \
+  --dag-signing-cadence 8 \
+  --agent-key-rotation-cadence 1000 \
+  --dag-key-rotation-cadence 10000 \
+  --key-mode shared \
+  --max-dag-nodes 100000 \
+  --initiator \
+  --json
+```
+
+Optional larger run from EC2-A:
+
+```bash
+python -m trax_transport_lab.tcp_peer \
+  --node-id ec2-a \
+  --listen-host 0.0.0.0 \
+  --listen-port 39100 \
+  --peer-host <ec2-b-private-ip> \
+  --peer-port 39100 \
+  --mode dag-genesis \
+  --duration-seconds 60 \
+  --payload-size 67108864 \
+  --chunk-size 1400 \
+  --dag-signing-cadence 8 \
+  --agent-key-rotation-cadence 1000 \
+  --dag-key-rotation-cadence 10000 \
+  --key-mode shared \
+  --max-dag-nodes 100000 \
+  --initiator \
+  --json
+```
+
+Expected result:
+
+- Both peers report `ok: true`.
+- Receiver reports `genesis_start_received: true`.
+- Initiator reports `genesis_accept_received: true`.
+- Receiver reports `genesis_ready_received: true`.
+- Receiver accepted DAG config matches the initiator config.
+- Initiator reports `final_response_received: true`.
+- Receiver reports `final_response_sent: true`.
+- Traffic stop ends demo traffic only.
+- No DAG close/finalize semantics are reported.
+- `hot_path_signed_packet_count` remains `0`.
+- `signed_genesis_create_count` remains `1`.
+- `signed_genesis_verify_count` remains `1`.
+
 ## Validate IaC Locally
 
 Run from the repository root:

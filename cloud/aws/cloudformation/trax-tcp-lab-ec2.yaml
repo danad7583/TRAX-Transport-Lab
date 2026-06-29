@@ -60,6 +60,16 @@ Resources:
         - Key: Project
           Value: trax-tcp-lab
 
+  TraxPeerTcpIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TraxTcpLabSecurityGroup
+      IpProtocol: tcp
+      FromPort: 39100
+      ToPort: 39100
+      SourceSecurityGroupId: !Ref TraxTcpLabSecurityGroup
+      Description: Allow private TRAX peer TCP traffic between lab EC2 instances
+
   TraxTcpLabInstanceRole:
     Type: AWS::IAM::Role
     Properties:

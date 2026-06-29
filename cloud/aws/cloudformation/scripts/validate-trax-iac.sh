@@ -63,6 +63,15 @@ require_contains "${BOOTSTRAP}" 'trax_transport_lab\.udp_demo --mode dag-genesis
 require_contains "${GITIGNORE}" '^\*\.pem$' ".gitignore must ignore *.pem private key files."
 require_contains "${README}" 'SSM Session Manager is the preferred access path' "CloudFormation README must document SSM as the preferred access path."
 require_contains "${README}" 'Never commit `\.pem` files or private keys' "CloudFormation README must warn against committing private keys."
+require_contains "${TEMPLATE}" 'TraxPeerTcpIngress:' "CloudFormation template must include TraxPeerTcpIngress."
+require_contains "${TEMPLATE}" 'FromPort: 39100' "CloudFormation template must allow private TCP peer port 39100."
+require_contains "${TEMPLATE}" 'ToPort: 39100' "CloudFormation template must allow private TCP peer port 39100."
+require_contains "${TEMPLATE}" 'SourceSecurityGroupId: !Ref TraxTcpLabSecurityGroup' "Peer TCP ingress must be a security-group self-reference."
+
+if grep -B8 -A8 '39100' "${TEMPLATE}" | grep -q 'CidrIp: 0.0.0.0/0'; then
+  echo "Port 39100 must not be exposed to 0.0.0.0/0." >&2
+  exit 1
+fi
 
 if git -C "${ROOT}" ls-files --error-unmatch trax-tcp-lab-key.pem >/dev/null 2>&1; then
   echo "trax-tcp-lab-key.pem must not be tracked by Git." >&2

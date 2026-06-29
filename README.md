@@ -133,6 +133,8 @@ bash cloud/aws/cloudformation/scripts/validate-trax-iac.sh
 
 No container orchestration is introduced for this milestone. No ECS, EKS, Docker, Kubernetes, autoscaling group, or load balancer is added.
 
+For EC2-to-EC2 validation, use `python -m trax_transport_lab.tcp_peer` in bidirectional TCP peer mode. The peer mode performs a fresh DAG/genesis handshake for each test run, then runs hash-bound request/response traffic until the initiator sends `TRAFFIC_STOP_V0`. Traffic stop ends the demo loop only; it does not close, seal, or finalize the DAG. See [cloud/aws/cloudformation/README.md](cloud/aws/cloudformation/README.md) for the Option A stack update and EC2 commands.
+
 Expected TCP demo output includes:
 
 ```text

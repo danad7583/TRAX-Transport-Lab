@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "cloud" / "aws" / "cloudformation" / "scripts" / "bootstrap-trax-tcp-lab.sh"
+TEMPLATE = ROOT / "cloud" / "aws" / "cloudformation" / "trax-tcp-lab-ec2.yaml"
 GITIGNORE = ROOT / ".gitignore"
 
 
@@ -51,3 +52,14 @@ def test_lab_key_is_not_tracked():
     )
 
     assert result.returncode != 0
+
+
+def test_peer_tcp_ingress_is_private_self_reference():
+    text = read(TEMPLATE)
+
+    assert "TraxPeerTcpIngress:" in text
+    assert "FromPort: 39100" in text
+    assert "ToPort: 39100" in text
+    assert "SourceSecurityGroupId: !Ref TraxTcpLabSecurityGroup" in text
+    peer_rule = text[text.index("TraxPeerTcpIngress:") : text.index("TraxTcpLabInstanceRole:")]
+    assert "CidrIp: 0.0.0.0/0" not in peer_rule
